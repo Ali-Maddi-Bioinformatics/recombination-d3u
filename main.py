@@ -6,6 +6,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
+import io
 
 
 def reverse_str(target_str):
@@ -30,6 +31,16 @@ def unpack_str(packed_str):
         return {"core": core, "repeat": repeat, "extend": F"{core * repeat}", "pack": packed_str}
     raise ValueError("Invalid STR string...")
 
+
+def standard_name(chromosome_name):
+    pattern = r"(.*?)(\d+)"
+    match = re.match(pattern, chromosome_name)
+
+    if match:
+        number = len(match.group(2))
+        if number < 2:
+            return match.group(1) + "0" + match.group(2)
+    return chromosome_name
 
 def calculate_colonies(dataset):
     colonies = {}
@@ -79,7 +90,7 @@ if __name__ == '__main__':
     # chromosomes = {}
     total_colonies_results = {}
     bar_format = (
-        "{desc:35}: {percentage:3.0f}%|"
+        "{desc:45}: {percentage:3.0f}%|"
         "{bar:30}| "
         "{n}/{total} "
         "[{elapsed}<{remaining}, {rate_fmt}, {postfix}]"
@@ -94,9 +105,10 @@ if __name__ == '__main__':
             chromosomes_files_list.append(file)
     progressbar_0 = tqdm(chromosomes_files_list, desc="Reading the chromosomes files", bar_format=bar_format, dynamic_ncols=False)
     for chromosome_file in progressbar_0:
-        dna = ""
+        dna_parts = []
         chromosome_name = ""
         with open(os.path.join(genome_folder_address, chromosome_file), 'r') as chromosome_file_content:
+            # for line in tqdm(chromosome_file_content, desc="Reading content of chromosome line by line", bar_format=bar_format, dynamic_ncols=False):
             for line in chromosome_file_content:
                 line = line.strip()
                 if not line:
@@ -105,17 +117,17 @@ if __name__ == '__main__':
                     raise ValueError("Invalid Chromosome Name...")
                 elif line[0] == '>':
                     if chromosome_name:
-                        primary_chromosome_dict[chromosome_name] = dna
+                        primary_chromosome_dict[chromosome_name] = "".join(dna_parts)
                         chromosome_name = line[1:] + F"_{int(datetime.now().timestamp()*1000)}"
-                        dna = ""
+                        dna_parts = []
                     else:
                         chromosome_name = line[1:] + F"_{int(datetime.now().timestamp()*1000)}"
                 else:
-                    dna += line
+                    dna_parts.append(line)
             if chromosome_name:
-                primary_chromosome_dict[chromosome_name] = dna
+                primary_chromosome_dict[chromosome_name] = "".join(dna_parts)
                 chromosome_name = ""
-                dna = ""
+                dna_parts = []
 
     patterns_list = []
     with open(primary_patterns_file_address, 'r') as content:
@@ -141,6 +153,8 @@ if __name__ == '__main__':
             #         "End_Locus": scan_start_index
             #     })
             #     occur_index = chromosome_dna.find(pattern["extend"], scan_start_index)
+            previous_location = 0
+            chromosome_number = primary_chromosome_name.split("_")[0].split("chr")[1]
             matches = re.finditer(pattern["extend"], dna_sequence, re.IGNORECASE)
             for match in matches:
                 occurs_list.append({
@@ -148,11 +162,17 @@ if __name__ == '__main__':
                     "Repeat": pattern["repeat"],
                     "STR": pattern["pack"],
                     "Sequence": match.group(0),
-                    "Start_Locus": match.start(),
-                    "End_Locus": match.end()
+                    "Start_Locus": match.start() + 1,
+                    "End_Locus": match.end() + 1,
+                    "Chromosome_Name": standard_name(primary_chromosome_name.split("_")[0]),
+                    "Link_to_Location":
+                        F"https://asia.ensembl.org/Homo_sapiens/Location/View?r={chromosome_number}:{match.start() + 1}-{match.end() + 1};db=core",
+                    "Distance_from_previous": match.start() - previous_location,
+                    "Distance_to_next": -1
                 })
 
-        chromosome_df = pd.DataFrame(occurs_list, columns=["Core", "Repeat", "STR", "Sequence", "Start_Locus", "End_Locus"])
+        chromosome_df = pd.DataFrame(occurs_list, columns=["Core", "Repeat", "STR", "Sequence", "Start_Locus", "End_Locus",
+                                                           "Chromosome_Name", "Link_to_Location", "Distance_from_previous", "Distance_to_next"])
         chromosome_df.sort_values(by="Start_Locus", ascending=True, inplace=True)
         patterns_map_dict[primary_chromosome_name] = chromosome_df
 
@@ -161,132 +181,126 @@ if __name__ == '__main__':
     format_now = now.strftime("%Y_%m_%d_%H_%M_%S")
     folder_of_current_results = F"Results_Set_{format_now}"
     folder_of_current_results = genome_folder_address + os.sep + "Results" + os.sep + folder_of_current_results
-    Path(folder_of_current_results).mkdir(parents=True, exist_ok=True)
+    folder_of_current_strs_map_result = folder_of_current_results + os.sep + "STRs_Map"
+    folder_of_current_colonies_result = folder_of_current_results + os.sep + "Colonies"
+    folder_of_current_colonies_members_result = folder_of_current_results + os.sep + "Colonies_members"
+    Path(folder_of_current_strs_map_result).mkdir(parents=True, exist_ok=True)
+    Path(folder_of_current_colonies_result).mkdir(parents=True, exist_ok=True)
+    Path(folder_of_current_colonies_members_result).mkdir(parents=True, exist_ok=True)
 
+    chromosome_unique_names = set()
     for primary_chromosome_name, df_str_map in patterns_map_dict.items():
-        df_str_map.to_csv(folder_of_current_results + os.sep + primary_chromosome_name + ".csv", index=False)
+        df_str_map.to_csv(folder_of_current_strs_map_result + os.sep + primary_chromosome_name + ".csv", index=False)
+        chromosome_unique_names.add(standard_name(primary_chromosome_name.split("_")[0]))
+
     print("Writing STRs Map files were finished.")
 
-    progressbar_1 = tqdm(os.listdir(genome_folder_address), desc="processing the STRs Map files", bar_format=bar_format, dynamic_ncols=False)
-    for chromosome_dir in progressbar_1:
-        progressbar_1.set_postfix_str(F"processing file {chromosome_dir}")
-        progressbar_2 = tqdm(os.listdir(os.path.join(genome_folder_address, chromosome_dir)), desc="processing different core length", leave=False,
-                             bar_format=bar_format, dynamic_ncols=False)
-        for coreLength in progressbar_2:
-            progressbar_2.set_postfix_str(F"processing core length {coreLength}")
-            strs_file_name = os.listdir(os.path.join(genome_folder_address, chromosome_dir, coreLength))
+    if len(chromosome_unique_names) != len(patterns_map_dict):
+        print("Duplicat chromosome name was detected.")
+        raise ValueError("Duplicate chromosome name was found ...")
 
-            if len(strs_file_name) > 1:
-                print(F"###### Error: More than one input file was detected for the chromosome file {chromosome_dir} with core length {coreLength} ######")
-                sys.exit(1)
-            elif len(strs_file_name) < 1:
-                print(F"###### Error: There was not any input file for the chromosome file {chromosome_dir} with core length {coreLength} ######")
-                continue
+    print("All chromosome names are unique.")
+    progressbar_1 = tqdm(patterns_map_dict.items(), desc="processing the STRs Map files", bar_format=bar_format, dynamic_ncols=False)
+    for primary_chromosome_name, df_str_map in progressbar_1:
+        progressbar_1.set_postfix_str(F"processing file {primary_chromosome_name}")
+        coreLength = 2
+        total_colonies_results.setdefault(coreLength, {})
+        chromosome_name = standard_name(primary_chromosome_name.split("_")[0])
 
-            total_colonies_results.setdefault(coreLength, {})
-            strs_file_path = os.path.join(genome_folder_address, chromosome_dir, coreLength, strs_file_name[0])
-            chromosome_name = strs_file_name[0].split(".")[0]
-            if os.path.isfile(strs_file_path):
+        progressbar_1.clear()
 
-                progressbar_1.clear()
-                progressbar_2.clear()
+        logging.info(F"\n\nReading STRs from: {primary_chromosome_name}")
+        # str_map_dataframe = pd.read_csv(strs_file_path, sep="\t", header=None)
+        # str_map_dataframe.columns = ["Core", "Repeat", "STR", "Start_Locus", "End_Locus"]
 
-                logging.info(F"\n\nReading STRs from: {strs_file_path}")
-                str_map_dataframe = pd.read_csv(strs_file_path, sep="\t", header=None)
-                str_map_dataframe.columns = ["Core", "Repeat", "STR", "Start_Locus", "End_Locus"]
+        logging.info(F"The STRs with core length {coreLength} were read from chromosome folder {primary_chromosome_name} ...")
+        logging.info(F"The dataset includes {df_str_map.shape[0]} STRs (row) and {df_str_map.shape[1]} columns")
+        logging.info(df_str_map.head(10))
 
-                logging.info(F"The STRs with core length {coreLength} were read from chromosome folder {chromosome_dir} ...")
-                logging.info(F"The dateset includes {str_map_dataframe.shape[0]} STRs (row) and {str_map_dataframe.shape[1]} columns")
-                logging.info(str_map_dataframe.head(10))
+        # ==============================================================================================================================================
+        logging.info("************** First phase was started (Calculating colonies based on pure STRs **************")
 
-                # ==============================================================================================================================================
-                logging.info("************** First phase was started (Calculating colonies based on pure STRs **************")
+        keys = df_str_map["STR"].str.upper().unique().tolist()
+        keys.sort()
 
-                keys = str_map_dataframe["STR"].str.upper().unique().tolist()
-                keys.sort()
+        logging.info(F"The list of difference STRs with core length {coreLength} in the chromosome {chromosome_name}:")
+        logging.info(keys)
+        logging.info("\n")
 
-                logging.info(F"The list of difference STRs with core length {coreLength} in the chromosome {chromosome_name}:")
-                logging.info(keys)
-                logging.info("\n")
+        progressbar_1.refresh()
 
-                progressbar_1.refresh()
-                progressbar_2.refresh()
+        str_categories_total_count = 0
+        progressbar_3 = tqdm(keys, desc="processing the STRs", leave=False, bar_format=bar_format, dynamic_ncols=False)
+        for key in progressbar_3:
+            progressbar_3.set_postfix_str(F"processing the STR {key}")
+            filtered_df = df_str_map[df_str_map["STR"].str.upper() == key].copy()
+            filtered_df.sort_values(by="Start_Locus", ascending=True, inplace=True)
 
-                str_categories_total_count = 0
-                progressbar_3 = tqdm(keys, desc="processing the STRs", leave=False, bar_format=bar_format, dynamic_ncols=False)
-                for key in progressbar_3:
-                    progressbar_3.set_postfix_str(F"processing the STR {key}")
-                    filtered_df = str_map_dataframe[str_map_dataframe["STR"].str.upper() == key].copy()
-                    filtered_df.sort_values(by="Start_Locus", ascending=True, inplace=True)
+            dict_value = total_colonies_results[coreLength].setdefault(key, {"dataset": {}, "colonies": {}})
+            dict_value["dataset"][chromosome_name] = filtered_df
+            str_categories_total_count += dict_value["dataset"][chromosome_name].shape[0]
 
-                    dict_value = total_colonies_results[coreLength].setdefault(key, {"dataset": {}, "colonies": {}})
-                    dict_value["dataset"][chromosome_name] = filtered_df
-                    str_categories_total_count += dict_value["dataset"][chromosome_name].shape[0]
+            # progressbar
 
-                    # progressbar
+            dict_value["colonies"][chromosome_name] = calculate_colonies(dict_value["dataset"][chromosome_name])
 
-                    dict_value["colonies"][chromosome_name] = calculate_colonies(dict_value["dataset"][chromosome_name])
+        if str_categories_total_count != df_str_map.shape[0]:
+            print(F"###### Error: The separation motif categories has problem! We count total {str_categories_total_count} Strs in categories while "
+                  F"there is {df_str_map.shape[0]} STRs ######")
+            sys.exit(1)
 
-                if str_categories_total_count != str_map_dataframe.shape[0]:
-                    print(F"###### Error: The separation motif categories has problem! We count total {str_categories_total_count} Strs in categories while "
-                          F"there is {str_map_dataframe.shape[0]} STRs ######")
-                    sys.exit(1)
+        progressbar_1.clear()
 
-                progressbar_1.clear()
-                progressbar_2.clear()
+        logging.info("*************** First phase was ended (Calculating colonies based on pure STRs ***************")
+        # ==============================================================================================================================================
+        # ==============================================================================================================================================
+        logging.info("************ Second phase was started (Calculating colonies based on grouped STRs ************")
 
-                logging.info("*************** First phase was ended (Calculating colonies based on pure STRs ***************")
-                # ==============================================================================================================================================
-                # ==============================================================================================================================================
-                logging.info("************ Second phase was started (Calculating colonies based on grouped STRs ************")
+        core_group = set()
+        for str_key in keys:
+            reversed_str_key = reverse_str(str_key)
+            if F"{str_key}-{reversed_str_key}" not in core_group and F"{reversed_str_key}-{str_key}" not in core_group:
+                core_group.add(F"{str_key}-{reversed_str_key}")
+        key_group_list = list(core_group)
 
-                core_group = set()
-                for str_key in keys:
-                    reversed_str_key = reverse_str(str_key)
-                    if F"{str_key}-{reversed_str_key}" not in core_group and F"{reversed_str_key}-{str_key}" not in core_group:
-                        core_group.add(F"{str_key}-{reversed_str_key}")
-                key_group_list = list(core_group)
+        key_group_list.sort()
 
-                key_group_list.sort()
+        logging.info(F"The list of difference STRs group with core length {coreLength} in the chromosome {chromosome_name}:")
+        logging.info(key_group_list)
+        logging.info("\n")
 
-                logging.info(F"The list of difference STRs group with core length {coreLength} in the chromosome {chromosome_name}:")
-                logging.info(key_group_list)
-                logging.info("\n")
+        progressbar_1.refresh()
 
-                progressbar_1.refresh()
-                progressbar_2.refresh()
+        str_categories_total_count = 0
+        progressbar_3 = tqdm(key_group_list, desc="processing the STRs group", leave=False, bar_format=bar_format, dynamic_ncols=False)
+        for key in progressbar_3:
+            progressbar_3.set_postfix_str(F"processing the STR {key}")
+            key_1, sep, key_2 = key.partition("-")
+            # dataset_df_1 = total_colonies_results[coreLength][key_1]["dataset"][chromosome_name]
+            # dataset_df_2 = total_colonies_results[coreLength][key_2]["dataset"][chromosome_name]
+            dataset_df_1 = total_colonies_results[coreLength].get(key_1, {}).get("dataset", {}).get(chromosome_name, pd.DataFrame())
+            dataset_df_2 = total_colonies_results[coreLength].get(key_2, {}).get("dataset", {}).get(chromosome_name, pd.DataFrame())
+            merged_df = pd.concat([dataset_df_1, dataset_df_2], axis=0, ignore_index=True)
+            merged_df.sort_values(by="Start_Locus", ascending=True, inplace=True)
+            dict_value = total_colonies_results[coreLength].setdefault(key, {"dataset": {}, "colonies": {}})
+            dict_value["dataset"][chromosome_name] = merged_df
+            str_categories_total_count += dict_value["dataset"][chromosome_name].shape[0]
+            merged_df.to_csv()
 
-                str_categories_total_count = 0
-                progressbar_3 = tqdm(key_group_list, desc="processing the STRs group", leave=False, bar_format=bar_format, dynamic_ncols=False)
-                for key in progressbar_3:
-                    progressbar_3.set_postfix_str(F"processing the STR {key}")
-                    key_1, sep, key_2 = key.partition("-")
-                    # dataset_df_1 = total_colonies_results[coreLength][key_1]["dataset"][chromosome_name]
-                    # dataset_df_2 = total_colonies_results[coreLength][key_2]["dataset"][chromosome_name]
-                    dataset_df_1 = total_colonies_results[coreLength].get(key_1, {}).get("dataset", {}).get(chromosome_name, pd.DataFrame())
-                    dataset_df_2 = total_colonies_results[coreLength].get(key_2, {}).get("dataset", {}).get(chromosome_name, pd.DataFrame())
-                    merged_df = pd.concat([dataset_df_1, dataset_df_2], axis=0, ignore_index=True)
-                    merged_df.sort_values(by="Start_Locus", ascending=True, inplace=True)
-                    dict_value = total_colonies_results[coreLength].setdefault(key, {"dataset": {}, "colonies": {}})
-                    dict_value["dataset"][chromosome_name] = merged_df
-                    str_categories_total_count += dict_value["dataset"][chromosome_name].shape[0]
+            # progressbar
 
-                    # progressbar
+            dict_value["colonies"][chromosome_name] = calculate_colonies(dict_value["dataset"][chromosome_name])
 
-                    dict_value["colonies"][chromosome_name] = calculate_colonies(dict_value["dataset"][chromosome_name])
+        if str_categories_total_count != df_str_map.shape[0]:
+            print(F"###### Error: The separation motif categories has problem! We count total {str_categories_total_count} Strs in categories while "
+                  F"there is {df_str_map.shape[0]} STRs ######")
+            sys.exit(1)
 
-                if str_categories_total_count != str_map_dataframe.shape[0]:
-                    print(F"###### Error: The separation motif categories has problem! We count total {str_categories_total_count} Strs in categories while "
-                          F"there is {str_map_dataframe.shape[0]} STRs ######")
-                    sys.exit(1)
+        progressbar_1.clear()
 
-                progressbar_1.clear()
-                progressbar_2.clear()
-
-                logging.info("************* Second phase was ended (Calculating colonies based on grouped STRs *************")
-                # ==============================================================================================================================================
-                progressbar_1.refresh()
-                progressbar_2.refresh()
+        logging.info("************* Second phase was ended (Calculating colonies based on grouped STRs *************")
+        # ==============================================================================================================================================
+        progressbar_1.refresh()
 
     print("\n\n========================================================================================================")
     print("============================================= final result =============================================")
@@ -316,5 +330,5 @@ if __name__ == '__main__':
             print(result_table)
             print("\n")
             print(104 * "-")
-            result_table.to_csv(os.path.join(sys.argv[1], F"Human_{str_key}_Colonies_Map_Result.csv"), index=True)
+            result_table.to_csv(os.path.join(folder_of_current_colonies_result, F"Human_{str_key}_Colonies_Map_Result.csv"), index=True)
 
