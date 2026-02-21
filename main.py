@@ -6,6 +6,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
+import pickle
 import io
 
 
@@ -42,26 +43,43 @@ def standard_name(chromosome_name):
             return match.group(1) + "0" + match.group(2)
     return chromosome_name
 
+
 def calculate_colonies(dataset):
     colonies = {}
     if dataset.empty:
         return colonies
 
     dataset.sort_values(by="Start_Locus", ascending=True, inplace=True)
+    dataset.reset_index(drop=True, inplace=True)
+    dataset["Distance_from_previous"] = dataset["Start_Locus"] - dataset["End_Locus"].shift(1)
+    dataset.loc[0, "Distance_from_previous"] = int(0)
+    dataset["Distance_from_previous"] = dataset["Distance_from_previous"].astype("int64")
+    dataset["Distance_to_next"] = dataset["Start_Locus"].shift(-1) - dataset["End_Locus"]
+    dataset.at[dataset.index[-1], "Distance_to_next"] = int(0)
+    dataset["Distance_to_next"] = dataset["Distance_to_next"].astype("int64")
 
+    colony_index = 1
+    colonies_member_count_dict = {}
     last_seen_colony_member_count = 0
-    last_seen_str_end_locus = dataset.iloc[0]["Start_Locus"]
 
     for index, str in dataset.iterrows():
-        if str["Start_Locus"] - last_seen_str_end_locus < 500:
-            last_seen_colony_member_count += 1
-        else:
-            colonies[last_seen_colony_member_count] = colonies.get(last_seen_colony_member_count, 0) + 1
-            last_seen_colony_member_count = 1
+        dataset.at[index, "Colony_Index"] = colony_index
+        last_seen_colony_member_count += 1
 
-        last_seen_str_end_locus = str["End_Locus"]
+        if str["Distance_to_next"] > 500:
+            colonies[last_seen_colony_member_count] = colonies.get(last_seen_colony_member_count, 0) + 1
+            colonies_member_count_dict[colony_index] = last_seen_colony_member_count
+            colony_index += 1
+            last_seen_colony_member_count = 0
+
 
     colonies[last_seen_colony_member_count] = colonies.get(last_seen_colony_member_count, 0) + 1
+    colonies_member_count_dict[colony_index] = last_seen_colony_member_count
+
+    for index in dataset.index:
+        colony_index = dataset.at[index, "Colony_Index"]
+        dataset.at[index, "Colony_Member_Count"] = colonies_member_count_dict[colony_index]
+        dataset.at[index, "Colony_Type"] = f"C({colonies_member_count_dict[colony_index]})"
 
     colonies_members_total_count = 0
     for colony_type_key in colonies.keys():
@@ -69,7 +87,8 @@ def calculate_colonies(dataset):
     if colonies_members_total_count != dataset.shape[0]:
         print(F"###### Error: The counting member of colonies has problem! We count total {colonies_members_total_count} {key} Strs in "
               F"chromosome {chromosome_name} while there is {dataset.shape[0]} STRs in it ######")
-        sys.exit(1)
+        raise ValueError(F"###### Error: The counting member of colonies has problem! We count total {colonies_members_total_count} {key} Strs in "
+              F"chromosome {chromosome_name} while there is {dataset.shape[0]} STRs in it ######")
     return colonies
 
 
@@ -116,7 +135,7 @@ if __name__ == '__main__':
                 elif len(line) == 1 and line == '>':
                     raise ValueError("Invalid Chromosome Name...")
                 elif line[0] == '>':
-                    if chromosome_name:
+                    if chromosome_name and dna_parts:
                         primary_chromosome_dict[chromosome_name] = "".join(dna_parts)
                         chromosome_name = line[1:] + F"_{int(datetime.now().timestamp()*1000)}"
                         dna_parts = []
@@ -124,7 +143,7 @@ if __name__ == '__main__':
                         chromosome_name = line[1:] + F"_{int(datetime.now().timestamp()*1000)}"
                 else:
                     dna_parts.append(line)
-            if chromosome_name:
+            if chromosome_name and dna_parts:
                 primary_chromosome_dict[chromosome_name] = "".join(dna_parts)
                 chromosome_name = ""
                 dna_parts = []
@@ -153,7 +172,7 @@ if __name__ == '__main__':
             #         "End_Locus": scan_start_index
             #     })
             #     occur_index = chromosome_dna.find(pattern["extend"], scan_start_index)
-            previous_location = 0
+            # previous_location = 0
             chromosome_number = primary_chromosome_name.split("_")[0].split("chr")[1]
             matches = re.finditer(pattern["extend"], dna_sequence, re.IGNORECASE)
             for match in matches:
@@ -167,12 +186,17 @@ if __name__ == '__main__':
                     "Chromosome_Name": standard_name(primary_chromosome_name.split("_")[0]),
                     "Link_to_Location":
                         F"https://asia.ensembl.org/Homo_sapiens/Location/View?r={chromosome_number}:{match.start() + 1}-{match.end() + 1};db=core",
-                    "Distance_from_previous": match.start() - previous_location,
-                    "Distance_to_next": -1
+                    "Distance_from_previous": "",
+                    "Distance_to_next": "",
+                    "Colony_Index": "",
+                    "Colony_Member_Count": 0,
+                    "Colony_Type": ""
                 })
+                # previous_location = match.start()
 
         chromosome_df = pd.DataFrame(occurs_list, columns=["Core", "Repeat", "STR", "Sequence", "Start_Locus", "End_Locus",
-                                                           "Chromosome_Name", "Link_to_Location", "Distance_from_previous", "Distance_to_next"])
+                                                           "Chromosome_Name", "Link_to_Location", "Distance_from_previous", "Distance_to_next",
+                                                           "Colony_Index", "Colony_Member_Count", "Colony_Type"])
         chromosome_df.sort_values(by="Start_Locus", ascending=True, inplace=True)
         patterns_map_dict[primary_chromosome_name] = chromosome_df
 
@@ -184,9 +208,11 @@ if __name__ == '__main__':
     folder_of_current_strs_map_result = folder_of_current_results + os.sep + "STRs_Map"
     folder_of_current_colonies_result = folder_of_current_results + os.sep + "Colonies"
     folder_of_current_colonies_members_result = folder_of_current_results + os.sep + "Colonies_members"
+    folder_of_current_data_structures = folder_of_current_results + os.sep + "Data_Structures"
     Path(folder_of_current_strs_map_result).mkdir(parents=True, exist_ok=True)
     Path(folder_of_current_colonies_result).mkdir(parents=True, exist_ok=True)
     Path(folder_of_current_colonies_members_result).mkdir(parents=True, exist_ok=True)
+    Path(folder_of_current_data_structures).mkdir(parents=True, exist_ok=True)
 
     chromosome_unique_names = set()
     for primary_chromosome_name, df_str_map in patterns_map_dict.items():
@@ -196,7 +222,7 @@ if __name__ == '__main__':
     print("Writing STRs Map files were finished.")
 
     if len(chromosome_unique_names) != len(patterns_map_dict):
-        print("Duplicat chromosome name was detected.")
+        print("Duplicate chromosome name was detected.")
         raise ValueError("Duplicate chromosome name was found ...")
 
     print("All chromosome names are unique.")
@@ -218,7 +244,7 @@ if __name__ == '__main__':
         logging.info(df_str_map.head(10))
 
         # ==============================================================================================================================================
-        logging.info("************** First phase was started (Calculating colonies based on pure STRs **************")
+        logging.info("************** First phase was started (Calculating datasets based on pure STRs **************")
 
         keys = df_str_map["STR"].str.upper().unique().tolist()
         keys.sort()
@@ -243,18 +269,21 @@ if __name__ == '__main__':
             # progressbar
 
             dict_value["colonies"][chromosome_name] = calculate_colonies(dict_value["dataset"][chromosome_name])
+            dict_value["dataset"][chromosome_name].to_csv(folder_of_current_colonies_members_result + os.sep +
+                                                          F"{chromosome_name}_D3Us_{key}.csv", index=False)
 
         if str_categories_total_count != df_str_map.shape[0]:
-            print(F"###### Error: The separation motif categories has problem! We count total {str_categories_total_count} Strs in categories while "
+            print(F"###### Error: The separation motif categories has problem! We count total {str_categories_total_count} STRs in categories while "
                   F"there is {df_str_map.shape[0]} STRs ######")
-            sys.exit(1)
+            raise ValueError(F"###### Error: The separation motif categories has problem! We count total {str_categories_total_count} STRs in categories while "
+                  F"there is {df_str_map.shape[0]} STRs ######")
 
         progressbar_1.clear()
 
-        logging.info("*************** First phase was ended (Calculating colonies based on pure STRs ***************")
+        logging.info("*************** First phase was ended (Calculating datasets based on pure STRs ***************")
         # ==============================================================================================================================================
         # ==============================================================================================================================================
-        logging.info("************ Second phase was started (Calculating colonies based on grouped STRs ************")
+        logging.info("************ Second phase was started (Calculating datasets based on grouped STRs ************")
 
         core_group = set()
         for str_key in keys:
@@ -285,20 +314,23 @@ if __name__ == '__main__':
             dict_value = total_colonies_results[coreLength].setdefault(key, {"dataset": {}, "colonies": {}})
             dict_value["dataset"][chromosome_name] = merged_df
             str_categories_total_count += dict_value["dataset"][chromosome_name].shape[0]
-            merged_df.to_csv()
+            # merged_df.to_csv()
 
             # progressbar
 
             dict_value["colonies"][chromosome_name] = calculate_colonies(dict_value["dataset"][chromosome_name])
+            dict_value["dataset"][chromosome_name].to_csv(folder_of_current_colonies_members_result + os.sep +
+                                                          F"Human_{chromosome_name}_D3Us_{key}_Map_Result.csv", index=False)
 
         if str_categories_total_count != df_str_map.shape[0]:
-            print(F"###### Error: The separation motif categories has problem! We count total {str_categories_total_count} Strs in categories while "
+            print(F"###### Error: The separation motif categories has problem! We count total {str_categories_total_count} STRs in categories while "
                   F"there is {df_str_map.shape[0]} STRs ######")
-            sys.exit(1)
+            raise ValueError(F"###### Error: The separation motif categories has problem! We count total {str_categories_total_count} STRs in categories while "
+                  F"there is {df_str_map.shape[0]} STRs ######")
 
         progressbar_1.clear()
 
-        logging.info("************* Second phase was ended (Calculating colonies based on grouped STRs *************")
+        logging.info("************* Second phase was ended (Calculating datasets based on grouped STRs *************")
         # ==============================================================================================================================================
         progressbar_1.refresh()
 
@@ -332,3 +364,14 @@ if __name__ == '__main__':
             print(104 * "-")
             result_table.to_csv(os.path.join(folder_of_current_colonies_result, F"Human_{str_key}_Colonies_Map_Result.csv"), index=True)
 
+            merged_str_map: pd.DataFrame = pd.concat(list(dict_based_str["dataset"].values()), axis=0, ignore_index=True)
+            merged_str_map.to_csv(os.path.join(folder_of_current_colonies_members_result, F"Human_Integrated_D3Us_{str_key}_Map_Result.csv"), index=False)
+
+
+    # save data structures
+    with open(os.path.join(folder_of_current_data_structures, "total_colonies_data_results.pkl"), "wb") as f:  # wb = write binary
+        pickle.dump(total_colonies_results, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    # # read data structures
+    # with open("total_colonies_data_results.pkl", "rb") as f:  # rb = read binary
+    #     total_colonies_results = pickle.load(f)
