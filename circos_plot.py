@@ -1,6 +1,7 @@
 import os
 import pickle
 import re
+from datetime import datetime
 from urllib.error import URLError
 from pathlib import Path
 import pandas as pd
@@ -37,6 +38,9 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
     folder_of_current_results = genome_folder_address + os.sep + "Results" + os.sep + target_folder_results
     folder_of_colonies_location = folder_of_current_results + os.sep + "Colonies_members"
     folder_of_genome_details = folder_of_current_results + os.sep + "Genome_Details"
+    folder_of_circos_plots = folder_of_current_results + os.sep + "Circos_Plots"
+
+    Path(folder_of_circos_plots).mkdir(parents=True, exist_ok=True)
 
     # if not final_results_data_path:
     #     folder_of_current_data_structures = folder_of_current_results + os.sep + "Data_Structures"
@@ -123,6 +127,45 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
     binned_df["STR_Log2_Enrich_Mean_Density_Per_MB"] = np.log2((binned_df["STR_Density_Per_MB"] + 1)/(mean_baseline + 1))
 
     # -----------------------
+    # Make colony map
+    # -----------------------
+
+    grouped_map = chromosome_str_map_dict.groupby(["Chromosome_Name", "Colony_Index", "Colony_Member_Count", "Colony_Type"], as_index=False)
+    colonies_map = (grouped_map.agg(member_count_check=("Core", "size"), Colony_Start=("Start_Locus", "min"), Colony_End=("End_Locus", "max")))
+    colonies_map["Colony_length"] = (colonies_map["Colony_End"].to_numpy() - colonies_map["Colony_Start"].to_numpy())
+    colonies_map["Colony_Bin_Median"] = ((colonies_map["Colony_Start"].to_numpy() + colonies_map["Colony_End"].to_numpy()) // 2).astype(np.int64)
+
+    filtered_colony_map = colonies_map[colonies_map["Colony_Member_Count"] > 2].copy()
+    filtered_colony_map["Colony_Bin_Index"] = (filtered_colony_map["Colony_Bin_Median"] // circos_bin).astype(np.int64)
+
+    # count per (chrom, bin)
+    colonies_binned_df = filtered_colony_map.groupby(["Chromosome_Name", "Colony_Bin_Index"]).size().reset_index(name="Bin_Colony_Count")
+
+    # x-position for drawing bar chart by using of bins center
+    colonies_binned_df["Colony_Bin_Center"] = colonies_binned_df["Colony_Bin_Index"] * circos_bin + circos_bin // 2
+
+    # correcting last bin center in each track1
+    for chromosome_name, chromosome_length in sectors.items():
+        last_bin_index = colonies_binned_df.loc[colonies_binned_df["Chromosome_Name"] == chromosome_name, "Colony_Bin_Index"].max()
+        if (last_bin_index + 1) * circos_bin <= chromosome_length:
+            continue
+        last_bin_start = last_bin_index * circos_bin
+        length_of_last_bin = chromosome_length - last_bin_start
+        if length_of_last_bin == circos_bin:
+            raise IndexError("index out of range")
+        colonies_binned_df.loc[colonies_binned_df["Colony_Bin_Index"] == last_bin_index, "Colony_Bin_Center"] = last_bin_start + length_of_last_bin // 2
+
+    colonies_binned_df["Colony_Density_Per_MB"] = colonies_binned_df["Bin_Colony_Count"] * (1_000_000 / circos_bin)
+
+    colonies_binned_df["Colony_Log10_Density_Per_MB"] = np.log1p(colonies_binned_df["Colony_Density_Per_MB"])
+    colonies_binned_df["Colony_Log2_Density_Per_MB"] = np.log2(colonies_binned_df["Colony_Density_Per_MB"] + 1)
+
+    median_baseline = np.median(colonies_binned_df["Colony_Density_Per_MB"])
+    mean_baseline = np.mean(colonies_binned_df["Colony_Density_Per_MB"])
+    colonies_binned_df["Colony_Log2_Enrich_Median_Density_Per_MB"] = np.log2((colonies_binned_df["Colony_Density_Per_MB"] + 1) / (median_baseline + 1))
+    colonies_binned_df["Colony_Log2_Enrich_Mean_Density_Per_MB"] = np.log2((colonies_binned_df["Colony_Density_Per_MB"] + 1) / (mean_baseline + 1))
+
+    # -----------------------
     # Build Circos with pyCirclize
     # -----------------------
 
@@ -179,12 +222,12 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
         # track3 for histogram
         track3 = sector.add_track((52, 64), r_pad_ratio=0.05)
         track3.axis(lw=0.6)
-        global_sector_y_max = binned_df["STR_Log2_Density_Per_MB"].max()
-        df_s = binned_df[binned_df["Chromosome_Name"] == sector.name]
+        global_sector_y_max = colonies_binned_df["Colony_Density_Per_MB"].max()
+        df_s = colonies_binned_df[colonies_binned_df["Chromosome_Name"] == sector.name]
         if len(df_s) == 0:
             continue
-        x = df_s["Bin_Center"].to_numpy()
-        y = df_s["STR_Log2_Density_Per_MB"].to_numpy()
+        x = df_s["Colony_Bin_Center"].to_numpy()
+        y = df_s["Colony_Density_Per_MB"].to_numpy()
 
         track3.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="green")
 
@@ -202,8 +245,11 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
 
 
     fig = circos.plotfig()
+    now = datetime.now()
+    format_now = now.strftime("%Y_%m_%d_%H_%M_%S")
+    plt.savefig(F"{folder_of_circos_plots}{os.sep}genome_density_{format_now}.png", dpi=600)
+    plt.savefig(F"{folder_of_circos_plots}{os.sep}genome_density_{format_now}.jpg", dpi=600)
     plt.show()
-    # fig.savefig("genome_density_pycirclize.png", dpi=300, bbox_inches="tight")
 
     # =================================================================================================================================================
 
