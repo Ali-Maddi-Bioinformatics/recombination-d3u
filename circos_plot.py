@@ -88,7 +88,12 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
     # -----------------------
     # Load STR occurrences (STR_Map file)
     # -----------------------
-    base_str = "(GT)3-(TG)3"
+    # base_str = "(GT)3-(TG)3"
+    # base_str = "(GT)3"
+    # base_str = "(TG)3"
+    # base_str = "(AC)3-(CA)3"
+    # base_str = "(AC)3"
+    base_str = "(CA)3"
     chromosome_str_map_dict = pd.read_csv(os.path.join(folder_of_colonies_location, F"Human_Integrated_D3Us_{base_str}_Map_Result.csv"))
 
     # -----------------------
@@ -179,7 +184,7 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
 
     circos = Circos(sectors, space=2)
     # circos.text("Homo sapiens (hg38)", deg=360, r=150, size=25)
-    circos.text("Homo sapiens (hg38)\n\n(GT)3-(TG)3\nD3U Density", deg=360, r=0, size=15)
+    circos.text(F"Homo sapiens (hg38)\n\n{base_str}\nD3U Density", deg=360, r=0, size=15)
 
     # Add cytoband track1 (this draws chromosome band pattern)
     circos.add_cytoband_tracks((97, 100), os.path.join(folder_of_genome_details, "Human_Cytobands.tsv"), track_name="cytoband")
