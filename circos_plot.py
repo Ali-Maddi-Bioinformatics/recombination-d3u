@@ -93,7 +93,11 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
     # base_str = "(TG)3"
     # base_str = "(AC)3-(CA)3"
     # base_str = "(AC)3"
-    base_str = "(CA)3"
+    # base_str = "(CA)3"
+    # base_str = "(AG)3-(GA)3"
+    # base_str = "(AT)3-(TA)3"
+    # base_str = "(CG)3-(GC)3"
+    base_str = "(CT)3-(TC)3"
     chromosome_str_map_dict = pd.read_csv(os.path.join(folder_of_colonies_location, F"Human_Integrated_D3Us_{base_str}_Map_Result.csv"))
 
     # -----------------------
@@ -203,14 +207,19 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
         # track1 for histogram
         track1 = sector.add_track((82, 94), r_pad_ratio=0.05)
         track1.axis(lw=0.6)
-        global_sector_y_max = binned_df["STR_Log10_Density_Per_MB"].max()
-        df_s = binned_df[binned_df["Chromosome_Name"] == sector.name]
+        # global_sector_y_max = binned_df["STR_Log10_Density_Per_MB"].max()
+        # df_s = binned_df[binned_df["Chromosome_Name"] == sector.name]
+        global_sector_y_max = colonies_binned_df["Colony_Density_Per_MB"].max()
+        df_s = colonies_binned_df[colonies_binned_df["Chromosome_Name"] == sector.name]
         if len(df_s) == 0:
             continue
-        x = df_s["Bin_Center"].to_numpy()
-        y = df_s["STR_Log10_Density_Per_MB"].to_numpy()
+        # x = df_s["Bin_Center"].to_numpy()
+        # y = df_s["STR_Log10_Density_Per_MB"].to_numpy()
+        x = df_s["Colony_Bin_Center"].to_numpy()
+        y = df_s["Colony_Density_Per_MB"].to_numpy()
 
-        track1.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="blue")
+        # track1.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="blue")
+        track1.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="green")
 
         # track2 for histogram
         track2 = sector.add_track((67, 79), r_pad_ratio=0.05)
@@ -224,17 +233,17 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
 
         track2.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="red")
 
-        # track3 for histogram
-        track3 = sector.add_track((52, 64), r_pad_ratio=0.05)
-        track3.axis(lw=0.6)
-        global_sector_y_max = colonies_binned_df["Colony_Density_Per_MB"].max()
-        df_s = colonies_binned_df[colonies_binned_df["Chromosome_Name"] == sector.name]
-        if len(df_s) == 0:
-            continue
-        x = df_s["Colony_Bin_Center"].to_numpy()
-        y = df_s["Colony_Density_Per_MB"].to_numpy()
-
-        track3.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="green")
+        # # track3 for histogram
+        # track3 = sector.add_track((52, 64), r_pad_ratio=0.05)
+        # track3.axis(lw=0.6)
+        # global_sector_y_max = colonies_binned_df["Colony_Density_Per_MB"].max()
+        # df_s = colonies_binned_df[colonies_binned_df["Chromosome_Name"] == sector.name]
+        # if len(df_s) == 0:
+        #     continue
+        # x = df_s["Colony_Bin_Center"].to_numpy()
+        # y = df_s["Colony_Density_Per_MB"].to_numpy()
+        #
+        # track3.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="green")
 
         # # track4 for histogram
         # track4 = sector.add_track((37, 49), r_pad_ratio=0.05)
