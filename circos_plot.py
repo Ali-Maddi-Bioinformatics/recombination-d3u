@@ -1,4 +1,5 @@
 import os
+import io
 import pickle
 import re
 from datetime import datetime
@@ -8,9 +9,11 @@ import pandas as pd
 import numpy as np
 from pandas import Series
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
 import utilities
 from pycirclize import Circos
 from pycirclize.utils import ColorCycler, load_eukaryote_example_dataset
+from PIL import Image
 
 def chr_sort_key(chr_name: str):
     # Natural sort key for human chromosomes: chr1..chr22, chrX, chrY, chrM (optional)
@@ -30,10 +33,17 @@ def normalize_chr(name: str) -> str:
     name = str(name)
     m = re.fullmatch(r"(chr)0*([0-9]+)$", name)
     if m:
-        return f"chr{int(m.group(2))}"
+        return f"Chr{int(m.group(2))}"
     return name
 
-def plot(genome_folder_address, primary_patterns_file_address, final_results_data_path):
+def safe_filename(text: str) -> str:
+    text = str(text)
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
+    text = text.replace("-", "")
+    text = text.strip("_")
+    return text
+
+def plot(genome_folder_address, primary_patterns_file_address, final_results_data_path, base_str):
     target_folder_results = "Results_Set_2026_02_16_14_56_49"
     folder_of_current_results = genome_folder_address + os.sep + "Results" + os.sep + target_folder_results
     folder_of_colonies_location = folder_of_current_results + os.sep + "Colonies_members"
@@ -97,7 +107,7 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
     # base_str = "(AG)3-(GA)3"
     # base_str = "(AT)3-(TA)3"
     # base_str = "(CG)3-(GC)3"
-    base_str = "(CT)3-(TC)3"
+    # base_str = "(CT)3-(TC)3"
     chromosome_str_map_dict = pd.read_csv(os.path.join(folder_of_colonies_location, F"Human_Integrated_D3Us_{base_str}_Map_Result.csv"))
 
     # -----------------------
@@ -123,11 +133,12 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
         length_of_last_bin = chromosome_length - last_bin_start
         if length_of_last_bin == circos_bin :
             raise IndexError("index out of range")
-        binned_df.loc[binned_df["Bin_Index"] == last_bin_index, "Bin_Center"] = last_bin_start + length_of_last_bin // 2
+        mask = ((binned_df["Chromosome_Name"] == chromosome_name) & (binned_df["Bin_Index"] == last_bin_index))
+        binned_df.loc[mask, "Bin_Center"] = last_bin_start + length_of_last_bin // 2
 
     binned_df["STR_Density_Per_MB"] = binned_df["Bin_STR_Count"] * (1_000_000 / circos_bin)
 
-    binned_df["STR_Log10_Density_Per_MB"] = np.log1p(binned_df["STR_Density_Per_MB"])
+    binned_df["STR_Log1e_Density_Per_MB"] = np.log1p(binned_df["STR_Density_Per_MB"])
     binned_df["STR_Log2_Density_Per_MB"] = np.log2(binned_df["STR_Density_Per_MB"] + 1)
 
     median_baseline = np.median(binned_df["STR_Density_Per_MB"])
@@ -162,11 +173,12 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
         length_of_last_bin = chromosome_length - last_bin_start
         if length_of_last_bin == circos_bin:
             raise IndexError("index out of range")
-        colonies_binned_df.loc[colonies_binned_df["Colony_Bin_Index"] == last_bin_index, "Colony_Bin_Center"] = last_bin_start + length_of_last_bin // 2
+        mask = ((colonies_binned_df["Chromosome_Name"] == chromosome_name) & (colonies_binned_df["Colony_Bin_Index"] == last_bin_index))
+        colonies_binned_df.loc[mask, "Colony_Bin_Center"] = last_bin_start + length_of_last_bin // 2
 
     colonies_binned_df["Colony_Density_Per_MB"] = colonies_binned_df["Bin_Colony_Count"] * (1_000_000 / circos_bin)
 
-    colonies_binned_df["Colony_Log10_Density_Per_MB"] = np.log1p(colonies_binned_df["Colony_Density_Per_MB"])
+    colonies_binned_df["Colony_Log1e_Density_Per_MB"] = np.log1p(colonies_binned_df["Colony_Density_Per_MB"])
     colonies_binned_df["Colony_Log2_Density_Per_MB"] = np.log2(colonies_binned_df["Colony_Density_Per_MB"] + 1)
 
     median_baseline = np.median(colonies_binned_df["Colony_Density_Per_MB"])
@@ -188,14 +200,15 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
 
     circos = Circos(sectors, space=2)
     # circos.text("Homo sapiens (hg38)", deg=360, r=150, size=25)
-    circos.text(F"Homo sapiens (hg38)\n\n{base_str}\nD3U Density", deg=360, r=0, size=15)
+    # circos.text(F"Homo sapiens (hg38)\n\n{base_str}\nD3U Density", deg=360, r=0, size=15)
+    circos.text(F"{base_str}\nD3U Density", deg=360, r=0, size=15)
 
     # Add cytoband track1 (this draws chromosome band pattern)
     circos.add_cytoband_tracks((97, 100), os.path.join(folder_of_genome_details, "Human_Cytobands.tsv"), track_name="cytoband")
 
     for sector in circos.sectors:
         sector.axis(lw=0.8, ec="none", fc="none")
-        sector.text(sector.name, r=120, size=10)
+        sector.text(normalize_chr(sector.name), r=120, size=10)
 
         sector.get_track("cytoband").xticks_by_interval(
             40000000,
@@ -205,16 +218,16 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
         )
 
         # track1 for histogram
-        track1 = sector.add_track((82, 94), r_pad_ratio=0.05)
+        track1 = sector.add_track((74, 94), r_pad_ratio=0.05)
         track1.axis(lw=0.6)
-        # global_sector_y_max = binned_df["STR_Log10_Density_Per_MB"].max()
+        # global_sector_y_max = binned_df["STR_Log1e_Density_Per_MB"].max()
         # df_s = binned_df[binned_df["Chromosome_Name"] == sector.name]
         global_sector_y_max = colonies_binned_df["Colony_Density_Per_MB"].max()
         df_s = colonies_binned_df[colonies_binned_df["Chromosome_Name"] == sector.name]
         if len(df_s) == 0:
             continue
         # x = df_s["Bin_Center"].to_numpy()
-        # y = df_s["STR_Log10_Density_Per_MB"].to_numpy()
+        # y = df_s["STR_Log1e_Density_Per_MB"].to_numpy()
         x = df_s["Colony_Bin_Center"].to_numpy()
         y = df_s["Colony_Density_Per_MB"].to_numpy()
 
@@ -222,7 +235,7 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
         track1.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="green")
 
         # track2 for histogram
-        track2 = sector.add_track((67, 79), r_pad_ratio=0.05)
+        track2 = sector.add_track((51, 71), r_pad_ratio=0.05)
         track2.axis(lw=0.6)
         global_sector_y_max = binned_df["STR_Density_Per_MB"].max()
         df_s = binned_df[binned_df["Chromosome_Name"] == sector.name]
@@ -261,9 +274,19 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
     fig = circos.plotfig()
     now = datetime.now()
     format_now = now.strftime("%Y_%m_%d_%H_%M_%S")
-    plt.savefig(F"{folder_of_circos_plots}{os.sep}genome_density_{format_now}.png", dpi=600)
-    plt.savefig(F"{folder_of_circos_plots}{os.sep}genome_density_{format_now}.jpg", dpi=600)
+
+    safe_base_str = safe_filename(base_str)
+    png_path = os.path.join(folder_of_circos_plots, f"genome_density_{format_now}_{safe_base_str}.png")
+    jpg_path = os.path.join(folder_of_circos_plots, f"genome_density_{format_now}_{safe_base_str}.jpg")
+
+    fig.savefig(png_path, dpi=600, bbox_inches="tight", pad_inches=0.05, facecolor="white")
+    fig.savefig(jpg_path, dpi=600, bbox_inches="tight", pad_inches=0.05, facecolor="white", pil_kwargs={"quality": 100, "subsampling": 0})
+
+    panel_image = fig_to_pil_image(fig, dpi=600, bbox_inches="tight", pad_inches=0.05)
+
     plt.show()
+    plt.close(fig)
+    return {"base_str": base_str, "png_path": png_path, "jpg_path": jpg_path, "panel_image": panel_image, "output_folder": folder_of_circos_plots}
 
     # =================================================================================================================================================
 
@@ -303,3 +326,78 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
     #     chromosome_ste_map_dict[chromosome_name] = (
     #         pd.read_csv(os.path.join(folder_of_colonies_location, F"Human_{chromosome_name}_D3Us_{base_str}_Map_Result.csv"), header = 0, index_col = 0))
 
+
+def fig_to_pil_image(fig, dpi=600, bbox_inches="tight", pad_inches=0.05):
+    buffer = io.BytesIO()
+    fig.savefig(buffer, format="png", dpi=dpi, bbox_inches=bbox_inches, pad_inches=pad_inches, facecolor="white")
+    buffer.seek(0)
+    image = Image.open(buffer).convert("RGB")
+    return image
+
+
+def plot_batch(genome_folder_address, primary_patterns_file_address, final_results_data_path, base_str_list):
+    if len(base_str_list) != 6:
+        raise ValueError("Exactly 6 base str are required for a 3x2 A4 panel.")
+
+    a4_width_inch = 8.27
+    a4_height_inch = 11.69
+
+    fig, axes = plt.subplots(3, 2, figsize=(a4_width_inch, a4_height_inch), dpi=600)
+    axes = axes.ravel()
+
+    image_records = []
+
+    for base_str in base_str_list:
+        record = plot(genome_folder_address, primary_patterns_file_address, final_results_data_path, base_str)
+        image_records.append(record)
+
+    output_folder = image_records[0]["output_folder"]
+
+    for ax, record in zip(axes, image_records):
+        img = record["panel_image"]
+
+        ax.imshow(img)
+        # ax.set_title(record["base_str"], fontsize=9, pad=3)
+        ax.axis("off")
+
+    fig.suptitle("Homo sapiens (hg38) - D3U Density", fontsize=13, y=0.99)
+
+    fig.subplots_adjust(left=0.01, right=0.99, top=0.95, bottom=0.08, wspace=0.02, hspace=0.08)
+
+    # -----------------------
+    # Bottom legend
+    # -----------------------
+    # legend_ax = fig.add_axes([0.15, 0.015, 0.70, 0.045])
+    legend_ax = fig.add_axes([0.18, 0.018, 0.64, 0.045])
+    legend_ax.set_xticks([])
+    legend_ax.set_yticks([])
+    legend_ax.set_xlim(0, 1)
+    legend_ax.set_ylim(0, 1)
+
+    for spine in legend_ax.spines.values():
+        spine.set_visible(True)
+        spine.set_edgecolor("0.45")
+        spine.set_linewidth(0.6)
+
+    # Rectangle settings
+    line_width = 3.0
+
+    # Red legend item: STR density
+    legend_ax.plot([0.08, 0.23], [0.5, 0.5], color="red", linewidth=line_width, solid_capstyle="round", transform=legend_ax.transAxes)
+    legend_ax.text(0.27, 0.5, "STR Density", transform=legend_ax.transAxes, va="center", ha="left", fontsize=9)
+
+    # Green legend item: Colony density
+    legend_ax.plot([0.55, 0.70], [0.5, 0.5], color="green", linewidth=line_width, solid_capstyle="round", transform=legend_ax.transAxes)
+    legend_ax.text(0.74, 0.5, "Colony Density", transform=legend_ax.transAxes, va="center", ha="left", fontsize=9)
+
+    now = datetime.now()
+    format_now = now.strftime("%Y_%m_%d_%H_%M_%S")
+
+    panel_png_path = os.path.join(output_folder, f"genome_density_{format_now}_total.png")
+    panel_jpg_path = os.path.join(output_folder, f"genome_density_{format_now}_total.jpg")
+
+    fig.savefig(panel_png_path, dpi=600, facecolor="white")
+    fig.savefig(panel_jpg_path, dpi=600, facecolor="white", pil_kwargs={"quality": 100, "subsampling": 0})
+
+    plt.show()
+    plt.close(fig)
