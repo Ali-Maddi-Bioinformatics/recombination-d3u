@@ -31,17 +31,18 @@ if __name__ == '__main__':
         "(GT)3-(TG)3",
     ]
     circos_plot.plot_batch(genome_folder_address, primary_patterns_file_address, "", BASE_STR_LIST)
-    # TARGET_RESULT_SET = "Results_Set_2026_02_16_14_56_49"
-    #
-    # stats_outputs = statistics_analysis.analyze(
-    #     genome_folder_address=genome_folder_address,
-    #     base_str_list=BASE_STR_LIST,
-    #     result_set_name=TARGET_RESULT_SET,
-    #     bin_size=1_000_000,
-    #     local_radius_bins=5,
-    #     min_colony_members=3,
-    #     telomere_radius_bp=1_000_000,
-    #     alpha=0.05,
-    # )
-    #
-    # print(stats_outputs)
+    TARGET_RESULT_SET = "Results_Set_2026_02_16_14_56_49"
+
+    stats_outputs = statistics_analysis.analyze(
+        genome_folder_address=genome_folder_address,
+        base_str_list=BASE_STR_LIST,
+        result_set_name=TARGET_RESULT_SET,
+        bin_size=1_000_000,
+        local_radius_bins=15,
+        min_colony_members=3,
+        telomere_radius_bp=1_000_000,
+        pericentromere_radius_bp=2_500_000,
+        alpha=0.05,
+    )
+
+    print(stats_outputs)

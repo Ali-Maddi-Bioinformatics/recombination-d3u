@@ -177,6 +177,173 @@ def load_cytobands(genome_details_folder: Path) -> Optional[pd.DataFrame]:
     return cytobands
 
 
+def get_centromere_bounds(
+    chromosome: str,
+    cytobands_df: Optional[pd.DataFrame],
+) -> Optional[Tuple[int, int]]:
+    """Return the inclusive centromere interval derived from all acen cytobands."""
+    if cytobands_df is None or cytobands_df.empty:
+        return None
+
+    chromosome = standardize_chromosome_name(chromosome)
+    chromosome_bands = cytobands_df[
+        (cytobands_df["Chromosome"] == chromosome)
+        & (cytobands_df["GieStain"].astype(str).str.lower() == "acen")
+    ]
+    if chromosome_bands.empty:
+        return None
+
+    centromere_start = int(chromosome_bands["ChromosomeStart"].min())
+    centromere_end = int(chromosome_bands["ChromosomeEnd"].max())
+    return centromere_start, centromere_end
+
+
+def interval_distance(
+    first_start: int,
+    first_end: int,
+    second_start: int,
+    second_end: int,
+) -> int:
+    """Return zero for overlapping intervals, otherwise the edge-to-edge distance."""
+    if first_end < second_start:
+        return int(second_start - first_end)
+    if second_end < first_start:
+        return int(first_start - second_end)
+    return 0
+
+
+def get_peak_region_annotation(
+    chromosome: str,
+    bin_start: int,
+    bin_end: int,
+    chromosome_size: int,
+    cytobands_df: Optional[pd.DataFrame],
+    telomere_radius_bp: int = 1_000_000,
+    pericentromere_radius_bp: int = 2_500_000,
+) -> Dict[str, object]:
+    """Annotate a peak interval relative to telomeres and the cytoband centromere."""
+    chromosome = standardize_chromosome_name(chromosome)
+    bin_start = int(bin_start)
+    bin_end = int(bin_end)
+    chromosome_size = int(chromosome_size)
+
+    if bin_start < 1 or bin_end < bin_start or bin_end > chromosome_size:
+        raise ValueError(
+            f"Invalid peak interval for {chromosome}: {bin_start}-{bin_end} "
+            f"with chromosome size {chromosome_size}"
+        )
+    if telomere_radius_bp < 0:
+        raise ValueError("telomere_radius_bp must be greater than or equal to zero")
+    if pericentromere_radius_bp < 0:
+        raise ValueError("pericentromere_radius_bp must be greater than or equal to zero")
+
+    peak_center = int((bin_start + bin_end) // 2)
+    distance_from_chromosome_start = int(bin_start - 1)
+    distance_from_chromosome_end = int(chromosome_size - bin_end)
+    distance_to_p_telomere = distance_from_chromosome_start
+    distance_to_q_telomere = distance_from_chromosome_end
+
+    if distance_to_p_telomere <= distance_to_q_telomere:
+        nearest_telomere = "p_telomere"
+        distance_to_nearest_telomere = distance_to_p_telomere
+    else:
+        nearest_telomere = "q_telomere"
+        distance_to_nearest_telomere = distance_to_q_telomere
+
+    centromere_bounds = get_centromere_bounds(chromosome, cytobands_df)
+    centromere_available = centromere_bounds is not None
+
+    centromere_start = float("nan")
+    centromere_end = float("nan")
+    centromere_center = float("nan")
+    distance_to_centromere = float("nan")
+    distance_center_to_centromere_center = float("nan")
+    signed_center_position_from_centromere = float("nan")
+    nearest_centromere_boundary = "unavailable"
+    chromosome_arm = "unknown"
+    overlaps_centromere = False
+
+    if centromere_bounds is not None:
+        centromere_start, centromere_end = centromere_bounds
+        centromere_center = int((centromere_start + centromere_end) // 2)
+        distance_to_centromere = interval_distance(
+            bin_start,
+            bin_end,
+            centromere_start,
+            centromere_end,
+        )
+        distance_center_to_centromere_center = int(abs(peak_center - centromere_center))
+        signed_center_position_from_centromere = int(peak_center - centromere_center)
+
+        if bin_end < centromere_start:
+            chromosome_arm = "p"
+            nearest_centromere_boundary = "p_side_boundary"
+        elif bin_start > centromere_end:
+            chromosome_arm = "q"
+            nearest_centromere_boundary = "q_side_boundary"
+        else:
+            chromosome_arm = "centromeric"
+            nearest_centromere_boundary = "overlap"
+            overlaps_centromere = True
+
+    if overlaps_centromere:
+        region_class = "centromeric"
+    elif distance_to_p_telomere <= telomere_radius_bp:
+        region_class = "p_terminal"
+    elif distance_to_q_telomere <= telomere_radius_bp:
+        region_class = "q_terminal"
+    elif (
+        centromere_available
+        and chromosome_arm == "p"
+        and distance_to_centromere <= pericentromere_radius_bp
+    ):
+        region_class = "p_pericentromeric"
+    elif (
+        centromere_available
+        and chromosome_arm == "q"
+        and distance_to_centromere <= pericentromere_radius_bp
+    ):
+        region_class = "q_pericentromeric"
+    else:
+        region_class = "internal"
+
+    landmark_distances = {
+        "p_telomere": distance_to_p_telomere,
+        "q_telomere": distance_to_q_telomere,
+    }
+    if centromere_available:
+        landmark_distances["centromere"] = int(distance_to_centromere)
+
+    nearest_landmark = min(landmark_distances, key=landmark_distances.get)
+    distance_to_nearest_landmark = int(landmark_distances[nearest_landmark])
+
+    return {
+        "Region_Class": region_class,
+        "Peak_Chromosome_Arm": chromosome_arm,
+        "Peak_Center_Position": peak_center,
+        "Peak_Center_Percent_Chromosome": float((peak_center / chromosome_size) * 100.0),
+        "Distance_From_Chromosome_Start_Bp": distance_from_chromosome_start,
+        "Distance_From_Chromosome_End_Bp": distance_from_chromosome_end,
+        "Distance_To_P_Telomere_Bp": distance_to_p_telomere,
+        "Distance_To_Q_Telomere_Bp": distance_to_q_telomere,
+        "Nearest_Telomere": nearest_telomere,
+        "Distance_To_Nearest_Telomere_Bp": int(distance_to_nearest_telomere),
+        "Centromere_Annotation_Available": bool(centromere_available),
+        "Centromere_Start": centromere_start,
+        "Centromere_End": centromere_end,
+        "Centromere_Center": centromere_center,
+        "Peak_Overlaps_Centromere": bool(overlaps_centromere),
+        "Nearest_Centromere_Boundary": nearest_centromere_boundary,
+        "Distance_To_Centromere_Bp": distance_to_centromere,
+        "Distance_Peak_Center_To_Centromere_Center_Bp": distance_center_to_centromere_center,
+        "Signed_Peak_Center_From_Centromere_Center_Bp": signed_center_position_from_centromere,
+        "Nearest_Chromosomal_Landmark": nearest_landmark,
+        "Distance_To_Nearest_Chromosomal_Landmark_Bp": distance_to_nearest_landmark,
+        "Telomere_Radius_Bp": int(telomere_radius_bp),
+        "Pericentromere_Radius_Bp": int(pericentromere_radius_bp),
+    }
+
+
 def annotate_region_class(
     chromosome: str,
     bin_start: int,
@@ -184,23 +351,19 @@ def annotate_region_class(
     chromosome_size: int,
     cytobands_df: Optional[pd.DataFrame],
     telomere_radius_bp: int = 1_000_000,
+    pericentromere_radius_bp: int = 5_000_000,
 ) -> str:
-    chromosome = standardize_chromosome_name(chromosome)
-
-    if cytobands_df is not None:
-        overlaps = cytobands_df[
-            (cytobands_df["Chromosome"] == chromosome)
-            & (cytobands_df["ChromosomeStart"] <= bin_end)
-            & (cytobands_df["ChromosomeEnd"] >= bin_start)
-        ]
-        if not overlaps.empty and (overlaps["GieStain"].astype(str).str.lower() == "acen").any():
-            return "centromeric"
-
-    if bin_start <= telomere_radius_bp:
-        return "p_terminal"
-    if (chromosome_size - bin_end) < telomere_radius_bp:
-        return "q_terminal"
-    return "internal"
+    """Return only the coarse region class; retained for backward compatibility."""
+    annotation = get_peak_region_annotation(
+        chromosome=chromosome,
+        bin_start=bin_start,
+        bin_end=bin_end,
+        chromosome_size=chromosome_size,
+        cytobands_df=cytobands_df,
+        telomere_radius_bp=telomere_radius_bp,
+        pericentromere_radius_bp=pericentromere_radius_bp,
+    )
+    return str(annotation["Region_Class"])
 
 
 def load_integrated_d3u_map(colonies_members_folder: Path, base_str: str) -> pd.DataFrame:
@@ -414,6 +577,7 @@ def calculate_peak_statistics_for_signal(
     local_radius_bins: int = 5,
     cytobands_df: Optional[pd.DataFrame] = None,
     telomere_radius_bp: int = 1_000_000,
+    pericentromere_radius_bp: int = 5_000_000,
 ) -> List[Dict[str, object]]:
     records = []
     chromosomes = sorted(pair_bins_df["Chromosome_Name"].unique().tolist(), key=chromosome_sort_key)
@@ -473,13 +637,14 @@ def calculate_peak_statistics_for_signal(
         chromosome_median_density = float(chr_df[density_column].median())
         chromosome_mean_density = float(chr_df[density_column].mean())
 
-        region_class = annotate_region_class(
+        region_annotation = get_peak_region_annotation(
             chromosome=chromosome,
             bin_start=int(peak_row["Bin_Start"]),
             bin_end=int(peak_row["Bin_End"]),
             chromosome_size=int(peak_row["Chromosome_Size"]),
             cytobands_df=cytobands_df,
             telomere_radius_bp=telomere_radius_bp,
+            pericentromere_radius_bp=pericentromere_radius_bp,
         )
 
         records.append(
@@ -487,7 +652,7 @@ def calculate_peak_statistics_for_signal(
                 "D3U_Pair": base_str,
                 "Signal_Type": signal_type,
                 "Chromosome": chromosome,
-                "Region_Class": region_class,
+                **region_annotation,
                 "Peak_Bin_Index": peak_bin_index,
                 "Peak_Bin_Start": int(peak_row["Bin_Start"]),
                 "Peak_Bin_End": int(peak_row["Bin_End"]),
@@ -545,6 +710,7 @@ def write_readme(
     local_radius_bins: int,
     min_colony_members: int,
     telomere_radius_bp: int,
+    pericentromere_radius_bp: int,
     alpha: float,
 ):
     readme_path = output_folder / "README_Statistics_Analysis.txt"
@@ -555,6 +721,7 @@ Bin size: {bin_size} bp
 Local background radius: +/- {local_radius_bins} bins, excluding the peak bin
 Minimum colony members: {min_colony_members}
 Telomere terminal radius for annotation: {telomere_radius_bp} bp
+Pericentromeric radius for annotation: {pericentromere_radius_bp} bp
 Significance threshold: Poisson_Local_Q_Global_BH <= {alpha}
 
 Main files:
@@ -574,7 +741,11 @@ Notes:
 - Poisson_Local_One_Sided_P is P(X >= observed count) using lambda estimated from local flanking bins.
 - Empirical_Local_One_Sided_P is computed from the local background bins as (1 + number of background bins with density >= observed density) / (1 + number of background bins).
 - FDR columns are Benjamini-Hochberg adjusted q-values.
-- Region_Class is a coarse annotation: centromeric if the peak bin overlaps an acen cytoband, p_terminal/q_terminal if the bin is within the terminal radius, otherwise internal.
+- Region_Class uses the following mutually exclusive priority: centromeric, p_terminal/q_terminal, p_pericentromeric/q_pericentromeric, internal.
+- p_pericentromeric and q_pericentromeric are assigned when a peak lies on the corresponding chromosome arm and its edge-to-edge distance from the acen centromere interval is within the configured pericentromeric radius.
+- Distance_To_Centromere_Bp is zero for a centromere-overlapping peak; otherwise it is the shortest edge-to-edge distance from the peak bin to the acen centromere interval.
+- Distance_To_P_Telomere_Bp and Distance_To_Q_Telomere_Bp are measured from the nearest peak-bin edge to the corresponding chromosome end.
+- Nearest_Chromosomal_Landmark identifies the closest of the p telomere, q telomere, and centromere.
 - Cytoband files with or without a header row are supported.
 """
     readme_path.write_text(content, encoding="utf-8")
@@ -588,6 +759,7 @@ def analyze(
     local_radius_bins: int = 5,
     min_colony_members: int = 3,
     telomere_radius_bp: int = 1_000_000,
+    pericentromere_radius_bp: int = 5_000_000,
     alpha: float = 0.05,
     include_chr_m: bool = False,
     write_per_pair_bin_tables: bool = True,
@@ -632,6 +804,7 @@ def analyze(
                 local_radius_bins=local_radius_bins,
                 cytobands_df=cytobands_df,
                 telomere_radius_bp=telomere_radius_bp,
+                pericentromere_radius_bp=pericentromere_radius_bp,
             )
         )
         peak_records.extend(
@@ -644,6 +817,7 @@ def analyze(
                 local_radius_bins=local_radius_bins,
                 cytobands_df=cytobands_df,
                 telomere_radius_bp=telomere_radius_bp,
+                pericentromere_radius_bp=pericentromere_radius_bp,
             )
         )
 
@@ -660,7 +834,7 @@ def analyze(
 
     pair_summary_df = pair_summary_df.sort_values("D3U_Pair").reset_index(drop=True)
     peak_stats_df["_Chromosome_Sort_Key"] = peak_stats_df["Chromosome"].map(
-        lambda x: f"{chromosome_sort_key(x)[0]:02d}_{chromosome_sort_key(x)[1]}"
+        lambda x: f"{chromosome_sort_key(x)[0]:02d}_{chromosome_sort_key(x)[1]:02d}"
     )
     peak_stats_df = peak_stats_df.sort_values(
         ["D3U_Pair", "Signal_Type", "_Chromosome_Sort_Key"]
@@ -688,6 +862,7 @@ def analyze(
         local_radius_bins=local_radius_bins,
         min_colony_members=min_colony_members,
         telomere_radius_bp=telomere_radius_bp,
+        pericentromere_radius_bp=pericentromere_radius_bp,
         alpha=alpha,
     )
 
