@@ -384,7 +384,7 @@ def plot_batch(genome_folder_address, primary_patterns_file_address, final_resul
 
     # Red legend item: STR density
     legend_ax.plot([0.08, 0.23], [0.5, 0.5], color="red", linewidth=line_width, solid_capstyle="round", transform=legend_ax.transAxes)
-    legend_ax.text(0.27, 0.5, "STR Density", transform=legend_ax.transAxes, va="center", ha="left", fontsize=9)
+    legend_ax.text(0.27, 0.5, "D3U Density", transform=legend_ax.transAxes, va="center", ha="left", fontsize=9)
 
     # Green legend item: Colony density
     legend_ax.plot([0.55, 0.70], [0.5, 0.5], color="green", linewidth=line_width, solid_capstyle="round", transform=legend_ax.transAxes)
