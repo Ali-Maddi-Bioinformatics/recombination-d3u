@@ -217,25 +217,26 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
             label_formatter=lambda v: f"{v / 1000000:.0f} Mb",
         )
 
-        # track1 for histogram
-        track1 = sector.add_track((74, 94), r_pad_ratio=0.05)
-        track1.axis(lw=0.6)
-        # global_sector_y_max = binned_df["STR_Log1e_Density_Per_MB"].max()
-        # df_s = binned_df[binned_df["Chromosome_Name"] == sector.name]
-        global_sector_y_max = colonies_binned_df["Colony_Density_Per_MB"].max()
-        df_s = colonies_binned_df[colonies_binned_df["Chromosome_Name"] == sector.name]
-        if len(df_s) == 0:
-            continue
-        # x = df_s["Bin_Center"].to_numpy()
-        # y = df_s["STR_Log1e_Density_Per_MB"].to_numpy()
-        x = df_s["Colony_Bin_Center"].to_numpy()
-        y = df_s["Colony_Density_Per_MB"].to_numpy()
-
-        # track1.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="blue")
-        track1.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="green")
+        # # track1 for histogram
+        # track1 = sector.add_track((74, 94), r_pad_ratio=0.05)
+        # track1.axis(lw=0.6)
+        # # global_sector_y_max = binned_df["STR_Log1e_Density_Per_MB"].max()
+        # # df_s = binned_df[binned_df["Chromosome_Name"] == sector.name]
+        # global_sector_y_max = colonies_binned_df["Colony_Density_Per_MB"].max()
+        # df_s = colonies_binned_df[colonies_binned_df["Chromosome_Name"] == sector.name]
+        # if len(df_s) == 0:
+        #     continue
+        # # x = df_s["Bin_Center"].to_numpy()
+        # # y = df_s["STR_Log1e_Density_Per_MB"].to_numpy()
+        # x = df_s["Colony_Bin_Center"].to_numpy()
+        # y = df_s["Colony_Density_Per_MB"].to_numpy()
+        #
+        # # track1.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="blue")
+        # track1.bar(x, y, vmax=global_sector_y_max + 2, width=circos_bin, color="green")
 
         # track2 for histogram
-        track2 = sector.add_track((51, 71), r_pad_ratio=0.05)
+        # track2 = sector.add_track((51, 71), r_pad_ratio=0.05)
+        track2 = sector.add_track((64, 94), r_pad_ratio=0.05)
         track2.axis(lw=0.6)
         global_sector_y_max = binned_df["STR_Density_Per_MB"].max()
         df_s = binned_df[binned_df["Chromosome_Name"] == sector.name]
@@ -386,9 +387,9 @@ def plot_batch(genome_folder_address, primary_patterns_file_address, final_resul
     legend_ax.plot([0.08, 0.23], [0.5, 0.5], color="red", linewidth=line_width, solid_capstyle="round", transform=legend_ax.transAxes)
     legend_ax.text(0.27, 0.5, "D3U Density", transform=legend_ax.transAxes, va="center", ha="left", fontsize=9)
 
-    # Green legend item: Colony density
-    legend_ax.plot([0.55, 0.70], [0.5, 0.5], color="green", linewidth=line_width, solid_capstyle="round", transform=legend_ax.transAxes)
-    legend_ax.text(0.74, 0.5, "Colony Density", transform=legend_ax.transAxes, va="center", ha="left", fontsize=9)
+    # # Green legend item: Colony density
+    # legend_ax.plot([0.55, 0.70], [0.5, 0.5], color="green", linewidth=line_width, solid_capstyle="round", transform=legend_ax.transAxes)
+    # legend_ax.text(0.74, 0.5, "Colony Density", transform=legend_ax.transAxes, va="center", ha="left", fontsize=9)
 
     now = datetime.now()
     format_now = now.strftime("%Y_%m_%d_%H_%M_%S")
