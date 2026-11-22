@@ -17,6 +17,15 @@ are blank. Boundary-overlapping sites count as outside (not fully inside)
 and are also counted separately. Missing acen annotations (chrM) produce
 blank comparison counts, not a claim of absence or containment.
 
+The summary also reports two signed coordinate distances in base pairs:
+First_Site_Distance_From_Centromere_Start_bp = first site start - acen start;
+Last_Site_Distance_To_Centromere_End_bp = acen end - last site end.
+Positive values are inward margins, zero means the corresponding boundaries
+coincide, and negative values mean the site envelope extends beyond that
+boundary. No extra +/-1 is applied: these are coordinate differences, not
+counts of intervening bases. Both cells are blank if there are no sites or
+no acen annotation.
+
 UCSC cytobands use 0-based half-open coordinates and are converted here:
 https://genome-blog.gi.ucsc.edu/blog/2016/12/12/the-ucsc-genome-browser-coordinate-counting-systems/
 The requested broad recognition motif is described in:
@@ -31,6 +40,9 @@ per worker at a time. Temporary per-chromosome tables are merged in natural
 chromosome order. Existing analysis outputs are replaced only after every
 selected chromosome has passed its length check. A subset run also replaces
 these two outputs with the selected subset. Defaults are independent of cwd.
+The default worker limit is max(1, detected logical CPU count - 1). The active
+pool is also limited to the number of selected chromosomes. --workers can
+override the limit; an unavailable CPU count is treated as one logical CPU.
 """
 
 import argparse
@@ -51,6 +63,7 @@ from urllib.parse import urlencode
 
 
 ROOT = Path(__file__).resolve().parent
+# Path's / operator joins components using the host OS's path conventions.
 DEFAULT_GENOME = ROOT / "input" / "Dataset_31"
 DEFAULT_RESULTS = DEFAULT_GENOME / "Results" / "Results_Set_2026_11_01_23_42_29"
 MOTIF = "XTTCGXXXXAXXCGGGX"
@@ -65,7 +78,8 @@ SUMMARY_FIELDS = [
     "Chromosome_Name", "Chromosome_Length", "Total_Sites", "Forward_Sites",
     "Reverse_Sites", "First_Site_Start_Locus", "First_Site_End_Locus",
     "Last_Site_Start_Locus", "Last_Site_End_Locus", "Centromere_Start_Locus",
-    "Centromere_End_Locus", "Sites_Inside_Centromere", "Sites_Outside_Centromere",
+    "Centromere_End_Locus", "First_Site_Distance_From_Centromere_Start_bp",
+    "Last_Site_Distance_To_Centromere_End_bp", "Sites_Inside_Centromere", "Sites_Outside_Centromere",
     "Sites_Overlapping_Centromere_Boundary", "All_Sites_Within_Centromere",
     "First_Site_Link", "Last_Site_Link", "Assembly", "Coordinate_System",
 ]
@@ -263,11 +277,13 @@ def scan_chromosome(name, path, expected_length, centromere, chunk_bytes, strand
     if processed != expected_length:
         raise ValueError("FASTA length mismatch for %s: read %d; expected %d" % (name, processed, expected_length))
     c_start, c_end = centromere if centromere is not None else ("", "")
+    first_margin = first_start - c_start if count and centromere is not None else ""
+    last_margin = c_end - last_end if count and centromere is not None else ""
     verdict = ("not_annotated" if centromere is None else
                "no_sites" if not count else "yes" if inside == count else "no")
     return dict(zip(SUMMARY_FIELDS, [
         name, processed, count, forward, count - forward, first_start, first_end,
-        last_start, last_end, c_start, c_end, inside if centromere else "",
+        last_start, last_end, c_start, c_end, first_margin, last_margin, inside if centromere else "",
         count - inside if centromere else "", boundary if centromere else "", verdict,
         location_link(name, first_start, first_end) if count else "",
         location_link(name, last_start, last_end) if count else "", "hs1", COORDINATES,
@@ -428,6 +444,7 @@ def print_plot(summaries, width=70):
 
 
 def parse_args(argv=None):
+    cpu_count = os.cpu_count() or 1
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--genome-dir", type=Path, default=DEFAULT_GENOME,
                         help="Directory of single-chromosome FASTA files (.txt also accepted).")
@@ -435,14 +452,15 @@ def parse_args(argv=None):
                         help="Result set containing Genome_Details; defaults to the requested 2026-11-01 set.")
     parser.add_argument("--cytobands", type=Path, help="Override Human_Cytobands.tsv (UCSC 0-based half-open).")
     parser.add_argument("--sizes", type=Path, help="Override Human_Genome_Chromosomes_length.csv.")
-    parser.add_argument("--workers", type=int, default=min(4, os.cpu_count() or 1),
-                        help="Concurrent chromosome processes (default: up to 4). Use 1 to reduce CPU usage.")
+    parser.add_argument("--workers", type=int, default=max(1, cpu_count - 1),
+                        help="Concurrent chromosome processes (default: logical CPU count minus 1, minimum 1).")
     parser.add_argument("--chunk-mb", type=int, default=4, help="Input block size per worker in MiB (default: 4).")
     parser.add_argument("--strand", choices=["both", "forward", "reverse"], default="both")
     parser.add_argument("--chromosomes", nargs="+", help="Optional subset, e.g. chr1 chrX chrM. Default: all.")
     parser.add_argument("--no-progress", action="store_true", help="Print chromosome completion logs only.")
     parser.add_argument("--no-plot", action="store_true", help="Skip terminal chromosome overview.")
     args = parser.parse_args(argv)
+    args.cpu_count = cpu_count
     if args.workers < 1 or args.chunk_mb < 1:
         parser.error("--workers and --chunk-mb must be positive integers")
     return args
@@ -475,8 +493,10 @@ def main(argv=None):
             handle.write("pid=%d\n" % os.getpid())
         workers = min(args.workers, len(names))
         print("CENP-B motif: %s; X = A/C/G/T; strands=%s" % (MOTIF, args.strand), flush=True)
-        print("Assembly: hs1; coordinates: %s; %d chromosomes; %d workers" %
-              (COORDINATES, len(names), workers), flush=True)
+        print("Assembly: hs1; coordinates: %s; %d chromosomes" %
+              (COORDINATES, len(names)), flush=True)
+        print("CPU cores (logical): %d; worker limit: %d; active workers: %d" %
+              (args.cpu_count, args.workers, workers), flush=True)
         print("Input: %s\nOutput: %s" % (args.genome_dir.resolve(), output_dir), flush=True)
         print("Scanning full chromosomes, including soft-masked sequence. Ambiguous bases do not match.", flush=True)
         with tempfile.TemporaryDirectory(prefix=".cenp_b_", dir=output_dir) as temporary_dir:

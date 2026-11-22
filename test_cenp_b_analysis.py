@@ -8,6 +8,7 @@ import random
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
 import cenp_b_analysis as analysis
@@ -33,6 +34,17 @@ def brute_force(sequence, strand="both"):
 
 
 class MotifTests(unittest.TestCase):
+    def test_worker_defaults_reserve_one_logical_cpu(self):
+        for detected, expected_cores, expected_workers in [(8, 8, 7), (2, 2, 1), (1, 1, 1), (None, 1, 1)]:
+            with self.subTest(detected=detected), mock.patch.object(analysis.os, "cpu_count", return_value=detected):
+                args = analysis.parse_args([])
+                self.assertEqual(args.cpu_count, expected_cores)
+                self.assertEqual(args.workers, expected_workers)
+
+    def test_worker_limit_can_be_overridden(self):
+        with mock.patch.object(analysis.os, "cpu_count", return_value=8):
+            self.assertEqual(analysis.parse_args(["--workers", "3"]).workers, 3)
+
     def test_regex_agrees_with_independent_basewise_oracle(self):
         rng = random.Random(73)
         # The 2 bp overlap also meets both boxes' fixed-base requirements.
@@ -116,6 +128,30 @@ class MotifTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Invalid sequence"):
                 analysis.scan_chromosome("chrM", fasta, 8, None, 10, "both", output)
 
+    def test_summary_centromere_distances(self):
+        sequence = "N" * 30 + HIT + "N" * 13 + REVERSE_HIT + "N" * 30
+        # First site spans 31..47; last site spans 61..77, independently of strand.
+        cases = [
+            ("inside", sequence, (11, 97), 20, 20),
+            ("on_boundaries", sequence, (31, 77), 0, 0),
+            ("left_outside", sequence, (41, 97), -10, 20),
+            ("right_outside", sequence, (11, 67), 20, -10),
+            ("both_outside", sequence, (41, 67), -10, -10),
+            ("no_centromere", sequence, None, "", ""),
+            ("no_sites", "N" * 107, (11, 97), "", ""),
+            ("single_site", "N" * 30 + HIT + "N" * 30, (11, 67), 20, 20),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fasta, output = root / "input.fa", root / "sites.csv"
+            for case, dna, centromere, first_distance, last_distance in cases:
+                with self.subTest(case=case):
+                    fasta.write_text(">chr1\n" + dna + "\n")
+                    summary = analysis.scan_chromosome("chr01", fasta, len(dna), centromere,
+                                                       7, "both", output)
+                    self.assertEqual(summary["First_Site_Distance_From_Centromere_Start_bp"], first_distance)
+                    self.assertEqual(summary["Last_Site_Distance_To_Centromere_End_bp"], last_distance)
+
     def test_multiprocess_outputs_and_failed_rerun_preserves_results(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -128,10 +164,12 @@ class MotifTests(unittest.TestCase):
             (details / "Human_Genome_Chromosomes_length.csv").write_text("Chromosome,Size\nchr01,34\nchrM,4\n")
             (details / "Human_Cytobands.tsv").write_text("chr1\t0\t34\tp11\tacen\n")
             args = ["--genome-dir", str(genome), "--result-dir", str(details.parent), "--workers", "2", "--no-progress"]
-            with contextlib.redirect_stdout(io.StringIO()) as log, contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(analysis.main(args[:-1]), 0)
+            with mock.patch.object(analysis.os, "cpu_count", return_value=8), \
+                    contextlib.redirect_stdout(io.StringIO()) as log, contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(analysis.main(args[:-3]), 0)
             self.assertIn("Chromosome overview", log.getvalue())
             self.assertIn("Written:", log.getvalue())
+            self.assertIn("CPU cores (logical): 8; worker limit: 7; active workers: 2", log.getvalue())
             sites = details / "CENP_B_sites.csv"
             summaries = details / "CENP_B_chromosome_summary.csv"
             with sites.open(newline="") as handle:
@@ -141,6 +179,10 @@ class MotifTests(unittest.TestCase):
             self.assertEqual(len(rows), 2)
             self.assertEqual([row["Chromosome_Name"] for row in summary_rows], ["chr01", "chrM"])
             self.assertEqual(summary_rows[0]["All_Sites_Within_Centromere"], "yes")
+            self.assertEqual(summary_rows[0]["First_Site_Distance_From_Centromere_Start_bp"], "0")
+            self.assertEqual(summary_rows[0]["Last_Site_Distance_To_Centromere_End_bp"], "0")
+            self.assertEqual(summary_rows[1]["First_Site_Distance_From_Centromere_Start_bp"], "")
+            self.assertEqual(summary_rows[1]["Last_Site_Distance_To_Centromere_End_bp"], "")
             self.assertEqual(rows[0]["Distance_to_next"], "0")
             before = sites.read_bytes(), summaries.read_bytes()
             (genome / "chr1.fa").write_text(">chr1\nACGT\n")
