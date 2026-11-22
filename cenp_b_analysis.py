@@ -3,8 +3,12 @@
 Run: python cenp_b_analysis.py
 Help: python cenp_b_analysis.py --help
 
-Only this module's two CSV outputs are replaced after a successful scan.
-No imports from main.py and no network requests are made.
+Two CSV outputs are replaced after a successful scan. Chromosome histogram
+PNGs with cytobands are then written to CENP_B_Plots beside Circos_Plots by
+cenp_b_plots.py. --plot-bin-size sets the histogram window in bp (default:
+1,000,000); --no-figures skips PNGs. --no-plot only skips the terminal sketch.
+Matplotlib is required for PNGs; no imports from main.py or network requests
+are made. To redraw only the PNGs from saved CSVs: python cenp_b_plots.py.
 
 Output: Genome_Details/CENP_B_sites.csv and CENP_B_chromosome_summary.csv.
 Both tables use 1-based inclusive coordinates: End_Locus - Start_Locus + 1
@@ -60,6 +64,8 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from pathlib import Path
 from urllib.parse import urlencode
+
+from cenp_b_plots import check_plotting_dependencies, plot_chromosome_histograms
 
 
 ROOT = Path(__file__).resolve().parent
@@ -459,10 +465,13 @@ def parse_args(argv=None):
     parser.add_argument("--chromosomes", nargs="+", help="Optional subset, e.g. chr1 chrX chrM. Default: all.")
     parser.add_argument("--no-progress", action="store_true", help="Print chromosome completion logs only.")
     parser.add_argument("--no-plot", action="store_true", help="Skip terminal chromosome overview.")
+    parser.add_argument("--no-figures", action="store_true", help="Skip chromosome histogram PNGs.")
+    parser.add_argument("--plot-bin-size", type=int, default=1_000_000,
+                        help="Histogram window size in bp (default: 1000000).")
     args = parser.parse_args(argv)
     args.cpu_count = cpu_count
-    if args.workers < 1 or args.chunk_mb < 1:
-        parser.error("--workers and --chunk-mb must be positive integers")
+    if args.workers < 1 or args.chunk_mb < 1 or args.plot_bin_size < 1:
+        parser.error("--workers, --chunk-mb and --plot-bin-size must be positive integers")
     return args
 
 
@@ -475,6 +484,8 @@ def main(argv=None):
     lock_path = output_dir / ".cenp_b_analysis.lock"
     locked = False
     try:
+        if not args.no_figures:
+            check_plotting_dependencies()
         sizes = read_sizes(sizes_path)
         centromeres = read_centromeres(cytobands_path, sizes)
         files = discover_chromosomes(args.genome_dir.resolve(), sizes)
@@ -506,6 +517,15 @@ def main(argv=None):
             outputs = write_outputs(summaries, temporary, output_dir)
         if not args.no_plot:
             print_plot(summaries, max(20, min(80, shutil.get_terminal_size((120, 24)).columns - 50)))
+        if not args.no_figures:
+            try:
+                plot_chromosome_histograms(args.result_dir, cytobands_path, args.plot_bin_size)
+            except (OSError, ValueError, csv.Error, RuntimeError) as error:
+                print("ERROR: CSV outputs were saved, but chromosome plotting failed: %s" % error,
+                      file=sys.stderr, flush=True)
+                for path in outputs:
+                    print("CSV saved: %s" % path, flush=True)
+                return 1
         print("\nCompleted: %s sites on %d chromosomes in %.1f seconds." %
               (format(sum(row["Total_Sites"] for row in summaries), ","), len(names), time.monotonic() - started))
         print("Matches are sequence candidates; acen comparison does not establish protein binding.")
@@ -513,7 +533,7 @@ def main(argv=None):
         for path in outputs:
             print("Written: %s" % path)
         return 0
-    except (OSError, ValueError, csv.Error) as error:
+    except (OSError, ValueError, csv.Error, RuntimeError) as error:
         print("ERROR: %s" % error, file=sys.stderr, flush=True)
         return 1
     except KeyboardInterrupt:

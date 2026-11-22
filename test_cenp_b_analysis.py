@@ -163,7 +163,8 @@ class MotifTests(unittest.TestCase):
             (genome / "chrM.fa").write_text(">chrM\nACGT\n")
             (details / "Human_Genome_Chromosomes_length.csv").write_text("Chromosome,Size\nchr01,34\nchrM,4\n")
             (details / "Human_Cytobands.tsv").write_text("chr1\t0\t34\tp11\tacen\n")
-            args = ["--genome-dir", str(genome), "--result-dir", str(details.parent), "--workers", "2", "--no-progress"]
+            args = ["--no-figures", "--genome-dir", str(genome), "--result-dir", str(details.parent),
+                    "--workers", "2", "--no-progress"]
             with mock.patch.object(analysis.os, "cpu_count", return_value=8), \
                     contextlib.redirect_stdout(io.StringIO()) as log, contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(analysis.main(args[:-3]), 0)
