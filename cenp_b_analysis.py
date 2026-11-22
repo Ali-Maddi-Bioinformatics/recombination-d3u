@@ -3,6 +3,12 @@
 Run: python cenp_b_analysis.py
 Help: python cenp_b_analysis.py --help
 
+RUN_SITE_ANALYSIS near the top of this file controls the execution mode:
+False (default): reuse the saved CSVs and redraw plots only;
+True: search FASTA, regenerate the CSVs, then draw the plots.
+Changing --plot-bin-size never triggers a search when the switch is False.
+Missing saved CSVs produce an error rather than starting a search.
+
 Two CSV outputs are replaced after a successful scan. Chromosome histogram
 PNGs with cytobands are then written to CENP_B_Plots beside Circos_Plots by
 cenp_b_plots.py. --plot-bin-size sets the histogram window in bp (default:
@@ -72,6 +78,8 @@ ROOT = Path(__file__).resolve().parent
 # Path's / operator joins components using the host OS's path conventions.
 DEFAULT_GENOME = ROOT / "input" / "Dataset_31"
 DEFAULT_RESULTS = DEFAULT_GENOME / "Results" / "Results_Set_2026_11_01_23_42_29"
+# False: redraw from saved CSVs. True: search FASTA and regenerate CSVs first.
+RUN_SITE_ANALYSIS = False
 MOTIF = "XTTCGXXXXAXXCGGGX"
 COMPLEMENT = str.maketrans("ACGTX", "TGCAX")
 COORDINATES = "1-based inclusive"
@@ -449,6 +457,40 @@ def print_plot(summaries, width=70):
               if row["Total_Sites"] else "no sites"))
 
 
+def plot_saved_results(args, output_dir, cytobands_path, started):
+    """Redraw saved results without reading FASTA or replacing either CSV."""
+    sites_path = output_dir / "CENP_B_sites.csv"
+    summary_path = output_dir / "CENP_B_chromosome_summary.csv"
+    missing = [str(path) for path in (sites_path, summary_path) if not path.is_file()]
+    if missing:
+        raise ValueError("Saved CENP-B CSVs are missing: %s. Set RUN_SITE_ANALYSIS = True "
+                         "to calculate sites first." % ", ".join(missing))
+    integer_fields = ("Chromosome_Length", "Total_Sites", "First_Site_Start_Locus",
+                      "Last_Site_End_Locus", "Centromere_Start_Locus", "Centromere_End_Locus")
+    summaries = []
+    with summary_path.open(encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        required = {"Chromosome_Name", "All_Sites_Within_Centromere", *integer_fields}
+        if not required.issubset(reader.fieldnames or []):
+            raise ValueError("Missing required columns in saved CENP-B chromosome summary")
+        for row in reader:
+            for field in integer_fields:
+                row[field] = int(row[field]) if row[field] != "" else ""
+            summaries.append(row)
+    if not summaries:
+        raise ValueError("Saved CENP-B chromosome summary is empty")
+    print("Mode: plots only (RUN_SITE_ANALYSIS = False); reusing saved CSVs.", flush=True)
+    print("CPU cores (logical): %d; active search workers: 0" % args.cpu_count, flush=True)
+    print("Using sites: %s\nUsing summary: %s" % (sites_path, summary_path), flush=True)
+    if not args.no_plot:
+        print_plot(summaries, max(20, min(80, shutil.get_terminal_size((120, 24)).columns - 50)))
+    if not args.no_figures:
+        plot_chromosome_histograms(args.result_dir, cytobands_path, args.plot_bin_size)
+    print("Completed plots from saved results: %d chromosomes in %.1f seconds." %
+          (len(summaries), time.monotonic() - started), flush=True)
+    return 0
+
+
 def parse_args(argv=None):
     cpu_count = os.cpu_count() or 1
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -484,6 +526,8 @@ def main(argv=None):
     lock_path = output_dir / ".cenp_b_analysis.lock"
     locked = False
     try:
+        if not RUN_SITE_ANALYSIS:
+            return plot_saved_results(args, output_dir, cytobands_path, started)
         if not args.no_figures:
             check_plotting_dependencies()
         sizes = read_sizes(sizes_path)

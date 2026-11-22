@@ -19,8 +19,10 @@ def make_fixture(root):
     with (details / "CENP_B_chromosome_summary.csv").open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["Chromosome_Name", "Chromosome_Length", "Total_Sites",
-                         "Centromere_Start_Locus", "Centromere_End_Locus"])
-        writer.writerows([("chr01", 250, 6, 101, 150), ("chrM", 20, 0, "", "")])
+                         "Centromere_Start_Locus", "Centromere_End_Locus",
+                         "First_Site_Start_Locus", "Last_Site_End_Locus", "All_Sites_Within_Centromere"])
+        writer.writerows([("chr01", 250, 6, 101, 150, 1, 250, "no"),
+                          ("chrM", 20, 0, "", "", "", "", "not_annotated")])
     with (details / "CENP_B_sites.csv").open("w", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["Chromosome_Name", "Start_Locus", "End_Locus"])
@@ -113,6 +115,36 @@ class PlotTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "acen boundaries differ"):
                 plots.read_cytobands(details / "Human_Cytobands.tsv", chromosomes)
 
+    def test_analysis_redraws_changed_bins_without_searching_or_rewriting_csvs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            result, details = make_fixture(root)
+            csv_paths = [details / "CENP_B_sites.csv", details / "CENP_B_chromosome_summary.csv"]
+            before = [(path.read_bytes(), path.stat().st_mtime_ns) for path in csv_paths]
+            with mock.patch.object(analysis, "RUN_SITE_ANALYSIS", False), \
+                    mock.patch.object(analysis, "read_sizes") as sizes, \
+                    mock.patch.object(analysis, "read_centromeres") as centromeres, \
+                    mock.patch.object(analysis, "discover_chromosomes") as discover, \
+                    mock.patch.object(analysis, "run_scans") as scan, \
+                    mock.patch.object(analysis, "write_outputs") as write, \
+                    mock.patch.object(analysis, "plot_chromosome_histograms",
+                                      wraps=plots.plot_chromosome_histograms) as draw:
+                for bin_size in (100, 50):
+                    with self.subTest(bin_size=bin_size), contextlib.redirect_stdout(io.StringIO()) as log:
+                        self.assertEqual(analysis.main(["--result-dir", str(result), "--genome-dir",
+                                                        str(root / "nonexistent_genome"),
+                                                        "--plot-bin-size", str(bin_size)]), 0)
+                    self.assertIn("Mode: plots only", log.getvalue())
+                    self.assertIn("Chromosome overview", log.getvalue())
+                    self.assertIn("active search workers: 0", log.getvalue())
+                    self.assertEqual(draw.call_args.args[2], bin_size)
+                for unused in (sizes, centromeres, discover, scan, write):
+                    unused.assert_not_called()
+                self.assertEqual(draw.call_count, 2)
+            self.assertEqual([(path.read_bytes(), path.stat().st_mtime_ns) for path in csv_paths], before)
+            self.assertEqual(len(list((result / "CENP_B_Plots").glob("*.png"))), 2)
+            self.assertFalse((details / ".cenp_b_analysis.lock").exists())
+
     def test_analysis_calls_plotting_and_reports_plot_failure_after_csv_save(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -126,11 +158,13 @@ class PlotTests(unittest.TestCase):
                 "Chromosome,Size\nchr01,250\nchrM,20\n")
             args = ["--genome-dir", str(genome), "--result-dir", str(result), "--workers", "1",
                     "--no-progress", "--no-plot", "--plot-bin-size", "100"]
-            with contextlib.redirect_stdout(io.StringIO()) as log:
+            with mock.patch.object(analysis, "RUN_SITE_ANALYSIS", True), \
+                    contextlib.redirect_stdout(io.StringIO()) as log:
                 self.assertEqual(analysis.main(args), 0)
             self.assertIn("Written 2 chromosome plots:", log.getvalue())
             self.assertEqual(len(list((result / "CENP_B_Plots").glob("*.png"))), 2)
-            with mock.patch.object(analysis, "plot_chromosome_histograms", side_effect=ValueError("test failure")), \
+            with mock.patch.object(analysis, "RUN_SITE_ANALYSIS", True), \
+                    mock.patch.object(analysis, "plot_chromosome_histograms", side_effect=ValueError("test failure")), \
                     contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as error:
                 self.assertEqual(analysis.main(args), 1)
             self.assertIn("CSV outputs were saved, but chromosome plotting failed", error.getvalue())

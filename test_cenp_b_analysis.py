@@ -45,6 +45,19 @@ class MotifTests(unittest.TestCase):
         with mock.patch.object(analysis.os, "cpu_count", return_value=8):
             self.assertEqual(analysis.parse_args(["--workers", "3"]).workers, 3)
 
+    def test_missing_saved_results_do_not_trigger_a_search(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(analysis, "RUN_SITE_ANALYSIS", False), \
+                    mock.patch.object(analysis, "discover_chromosomes") as discover, \
+                    mock.patch.object(analysis, "run_scans") as scan, \
+                    contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(analysis.main(["--result-dir", directory, "--no-figures"]), 1)
+            self.assertIn("Saved CENP-B CSVs are missing", error.getvalue())
+            self.assertIn("RUN_SITE_ANALYSIS = True", error.getvalue())
+            discover.assert_not_called()
+            scan.assert_not_called()
+            self.assertFalse((Path(directory) / "Genome_Details").exists())
+
     def test_regex_agrees_with_independent_basewise_oracle(self):
         rng = random.Random(73)
         # The 2 bp overlap also meets both boxes' fixed-base requirements.
@@ -165,7 +178,8 @@ class MotifTests(unittest.TestCase):
             (details / "Human_Cytobands.tsv").write_text("chr1\t0\t34\tp11\tacen\n")
             args = ["--no-figures", "--genome-dir", str(genome), "--result-dir", str(details.parent),
                     "--workers", "2", "--no-progress"]
-            with mock.patch.object(analysis.os, "cpu_count", return_value=8), \
+            with mock.patch.object(analysis, "RUN_SITE_ANALYSIS", True), \
+                    mock.patch.object(analysis.os, "cpu_count", return_value=8), \
                     contextlib.redirect_stdout(io.StringIO()) as log, contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(analysis.main(args[:-3]), 0)
             self.assertIn("Chromosome overview", log.getvalue())
@@ -187,7 +201,8 @@ class MotifTests(unittest.TestCase):
             self.assertEqual(rows[0]["Distance_to_next"], "0")
             before = sites.read_bytes(), summaries.read_bytes()
             (genome / "chr1.fa").write_text(">chr1\nACGT\n")
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with mock.patch.object(analysis, "RUN_SITE_ANALYSIS", True), \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(analysis.main(args), 1)
             self.assertEqual((sites.read_bytes(), summaries.read_bytes()), before)
             self.assertFalse((details / ".cenp_b_analysis.lock").exists())
