@@ -44,7 +44,8 @@ def safe_filename(text: str) -> str:
     return text
 
 def plot(genome_folder_address, primary_patterns_file_address, final_results_data_path, base_str):
-    target_folder_results = "Results_Set_2026_02_16_14_56_49"
+    # target_folder_results = "Results_Set_2026_02_16_14_56_49"
+    target_folder_results = "Results_Set_2026_11_01_23_42_29"
     folder_of_current_results = genome_folder_address + os.sep + "Results" + os.sep + target_folder_results
     folder_of_colonies_location = folder_of_current_results + os.sep + "Colonies_members"
     folder_of_genome_details = folder_of_current_results + os.sep + "Genome_Details"
@@ -190,13 +191,15 @@ def plot(genome_folder_address, primary_patterns_file_address, final_results_dat
     # Build Circos with pyCirclize
     # -----------------------
 
-    if not Path(os.path.join(folder_of_genome_details, "Human_Cytobands.tsv")).exists():
-        # Load hg38 example cytoband file from pyCirclize dataset
-        chr_bed_file, cytoband_file, chr_links = load_eukaryote_example_dataset("hg38")
-        cytobands_df = pd.read_csv(cytoband_file, sep="\t", header=None, names=["Chromosome", "ChromosomeStart", "ChromosomeEnd", "name", "gieStain"])
-        cytobands_df["Chromosome"] = cytobands_df["Chromosome"].map(utilities.standard_name)
-        cytobands_df = cytobands_df[cytobands_df["Chromosome"] != "chrM"]
-        cytobands_df.to_csv(os.path.join(folder_of_genome_details, "Human_Cytobands.tsv"), sep="\t", header=False, index=False)
+    # if not Path(os.path.join(folder_of_genome_details, "Human_Cytobands.tsv")).exists():
+    #     # Load hg38 example cytoband file from pyCirclize dataset
+    #     chr_bed_file, cytoband_file, chr_links = load_eukaryote_example_dataset("hg38")
+    #     cytobands_df = pd.read_csv(cytoband_file, sep="\t", header=None, names=["Chromosome", "ChromosomeStart", "ChromosomeEnd", "name", "gieStain"])
+    #     cytobands_df["Chromosome"] = cytobands_df["Chromosome"].map(utilities.standard_name)
+    #     cytobands_df = cytobands_df[cytobands_df["Chromosome"] != "chrM"]
+    #     cytobands_df.to_csv(os.path.join(folder_of_genome_details, "Human_Cytobands.tsv"), sep="\t", header=False, index=False)
+    if not Path(folder_of_genome_details, "Human_Cytobands.tsv").is_file():
+        raise FileNotFoundError("Missing hs1 Human_Cytobands.tsv in Genome_Details")
 
     circos = Circos(sectors, space=2)
     # circos.text("Homo sapiens (hg38)", deg=360, r=150, size=25)
@@ -361,7 +364,8 @@ def plot_batch(genome_folder_address, primary_patterns_file_address, final_resul
         # ax.set_title(record["base_str"], fontsize=9, pad=3)
         ax.axis("off")
 
-    fig.suptitle("Homo sapiens (hg38) - D3U Density", fontsize=13, y=0.99)
+    # fig.suptitle("Homo sapiens (hg38) - D3U Density", fontsize=13, y=0.99)
+    fig.suptitle("Homo sapiens (T2T-CHM13v2.0 / hs1) - D3U Density", fontsize=13, y=0.99)
 
     fig.subplots_adjust(left=0.01, right=0.99, top=0.95, bottom=0.08, wspace=0.02, hspace=0.08)
 

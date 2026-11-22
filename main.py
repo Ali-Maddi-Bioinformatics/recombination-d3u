@@ -18,6 +18,8 @@ if __name__ == '__main__':
     # target_str_repeat = int(sys.argv[3])
 
     # final_results_data_path = colonies.process(genome_folder_address, primary_patterns_file_address)
+    # print(final_results_data_path)
+    # sys.exit(0)
     # circos_plot.plot(genome_folder_address, primary_patterns_file_address, final_results_data_path)
 
     # circos_plot.plot(genome_folder_address, primary_patterns_file_address, "", "(CT)3-(TC)3")
@@ -31,7 +33,8 @@ if __name__ == '__main__':
         "(GT)3-(TG)3",
     ]
     circos_plot.plot_batch(genome_folder_address, primary_patterns_file_address, "", BASE_STR_LIST)
-    TARGET_RESULT_SET = "Results_Set_2026_02_16_14_56_49"
+    # TARGET_RESULT_SET = "Results_Set_2026_02_16_14_56_49"
+    TARGET_RESULT_SET = "Results_Set_2026_11_01_23_42_29"
 
     stats_outputs = statistics_analysis.analyze(
         genome_folder_address=genome_folder_address,
